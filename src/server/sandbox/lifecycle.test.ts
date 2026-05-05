@@ -9,6 +9,7 @@ import {
   ensureSandboxRunning,
   ensureSandboxReady,
   ensureRunningSandboxDynamicConfigFresh,
+  syncGatewayConfigToSandbox,
   getRunningSandboxTimeoutRemainingMs,
   isPreparedRestoreReusable,
   markRestoreTargetDirty,
@@ -4310,6 +4311,93 @@ test("ensureRunningSandboxDynamicConfigFresh returns already-fresh when hash mat
       0,
       "No gateway restart should happen on hash match",
     );
+  });
+});
+
+test("syncGatewayConfigToSandbox waits for Slack route registration after restart", async () => {
+  await withHarness(async (h) => {
+    process.env.NEXT_PUBLIC_BASE_DOMAIN = "test.example.com";
+    await h.driveToRunning();
+    await h.mutateMeta((meta) => {
+      meta.channels.slack = {
+        signingSecret: "test-slack-signing-secret",
+        botToken: "xoxb-test-slack-bot-token",
+        configuredAt: Date.now(),
+      };
+    });
+
+    const meta = await h.getMeta();
+    assert.ok(meta.sandboxId, "sandbox should be running");
+    const handle = h.controller.getHandle(meta.sandboxId);
+    assert.ok(handle, "sandbox handle should exist");
+
+    let slackRouteProbeCount = 0;
+    handle.responders.push((cmd, args) => {
+      if (cmd !== "bash" || args?.[0] !== "-c") {
+        return undefined;
+      }
+      const script = args[1] ?? "";
+      if (script.includes(`http://localhost:3000/`) && script.includes("openclaw-app")) {
+        return { exitCode: 0, output: async () => "ok" };
+      }
+      if (script.includes("/slack/events")) {
+        slackRouteProbeCount += 1;
+        const status = slackRouteProbeCount >= 3 ? "401" : "404";
+        return { exitCode: 0, output: async () => status };
+      }
+      return undefined;
+    });
+
+    const result = await syncGatewayConfigToSandbox();
+
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.reason, "config_written_and_restarted");
+    assert.equal(slackRouteProbeCount, 3);
+    assert.ok(
+      handle.commands.some(
+        (c) => c.cmd === "bash" && c.args?.[0] === OPENCLAW_GATEWAY_RESTART_SCRIPT_PATH,
+      ),
+      "Gateway should be restarted before Slack route readiness is checked",
+    );
+  });
+});
+
+test("syncGatewayConfigToSandbox degrades when Slack route stays unregistered", async () => {
+  await withHarness(async (h) => {
+    process.env.NEXT_PUBLIC_BASE_DOMAIN = "test.example.com";
+    await h.driveToRunning();
+    await h.mutateMeta((meta) => {
+      meta.channels.slack = {
+        signingSecret: "test-slack-signing-secret",
+        botToken: "xoxb-test-slack-bot-token",
+        configuredAt: Date.now(),
+      };
+    });
+
+    const meta = await h.getMeta();
+    assert.ok(meta.sandboxId, "sandbox should be running");
+    const handle = h.controller.getHandle(meta.sandboxId);
+    assert.ok(handle, "sandbox handle should exist");
+
+    handle.responders.push((cmd, args) => {
+      if (cmd !== "bash" || args?.[0] !== "-c") {
+        return undefined;
+      }
+      const script = args[1] ?? "";
+      if (script.includes(`http://localhost:3000/`) && script.includes("openclaw-app")) {
+        return { exitCode: 0, output: async () => "ok" };
+      }
+      if (script.includes("/slack/events")) {
+        return { exitCode: 0, output: async () => "404" };
+      }
+      return undefined;
+    });
+
+    const result = await syncGatewayConfigToSandbox();
+
+    assert.equal(result.outcome, "failed");
+    assert.equal(result.liveConfigFresh, false);
+    assert.match(result.reason, /Slack route did not become ready/);
   });
 });
 

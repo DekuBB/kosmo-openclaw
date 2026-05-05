@@ -39,7 +39,7 @@ const CHANNEL_ID = "C0L4LOCALCYCLE";
 
 function requireSlackSignature(
   rawBody: string,
-  headers: Headers | Record<string, string> | undefined,
+  headers: HeadersInit | undefined,
   message: string,
 ): { signature: string; timestamp: string } {
   const h = headers instanceof Headers ? headers : new Headers(headers ?? {});

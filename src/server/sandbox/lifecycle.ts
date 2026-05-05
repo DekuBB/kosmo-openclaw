@@ -277,6 +277,53 @@ async function restartGateway(
   }
 }
 
+async function waitForGatewayRootReady(sandbox: SandboxHandle): Promise<void> {
+  await pollUntil({
+    label: "config-sync-gateway-ready",
+    timeoutMs: 15_000,
+    initialDelayMs: 200,
+    maxDelayMs: 500,
+    step: async () => {
+      const result = await sandbox.runCommand("bash", [
+        "-c",
+        `curl -s -f --max-time 1 http://localhost:${OPENCLAW_PORT}/ 2>/dev/null | grep -q 'openclaw-app' && echo ok || echo not-ready`,
+      ]);
+      const out = await result.output("stdout");
+      if (out.trim() === "ok") return { done: true, result: true };
+      return { done: false };
+    },
+    timeoutError: () => new Error("Gateway did not become ready after config sync restart"),
+  });
+}
+
+async function waitForConfiguredChannelRoutesReady(params: {
+  sandbox: SandboxHandle;
+  slackConfigured: boolean;
+}): Promise<void> {
+  if (!params.slackConfigured) {
+    return;
+  }
+
+  await pollUntil({
+    label: "config-sync-slack-route-ready",
+    timeoutMs: 30_000,
+    initialDelayMs: 250,
+    maxDelayMs: 1_000,
+    step: async () => {
+      const result = await params.sandbox.runCommand("bash", [
+        "-c",
+        `curl -s -o /dev/null -w '%{http_code}' --max-time 2 -X POST http://localhost:${OPENCLAW_PORT}/slack/events 2>/dev/null || echo 000`,
+      ]);
+      const status = (await result.output("stdout")).trim().slice(-3);
+      if (status === "400" || status === "401" || status === "403") {
+        return { done: true, result: true };
+      }
+      return { done: false };
+    },
+    timeoutError: () => new Error("Slack route did not become ready after config sync restart"),
+  });
+}
+
 export type BackgroundScheduler = (callback: () => Promise<void> | void) => void;
 
 export type CronWakeReadResult =
@@ -992,22 +1039,13 @@ export async function syncGatewayConfigToSandbox(): Promise<LiveConfigSyncResult
       };
     }
 
-    // Poll for gateway readiness after restart.
-    await pollUntil({
-      label: "config-sync-gateway-ready",
-      timeoutMs: 15_000,
-      initialDelayMs: 200,
-      maxDelayMs: 500,
-      step: async () => {
-        const result = await sandbox.runCommand("bash", [
-          "-c",
-          `curl -s -f --max-time 1 http://localhost:${OPENCLAW_PORT}/ 2>/dev/null | grep -q 'openclaw-app' && echo ok || echo not-ready`,
-        ]);
-        const out = await result.output("stdout");
-        if (out.trim() === "ok") return { done: true, result: true };
-        return { done: false };
-      },
-      timeoutError: () => new Error("Gateway did not become ready after config sync restart"),
+    // Poll for gateway readiness after restart, then verify configured channel
+    // routes. The root page can respond before Slack finishes registering
+    // /slack/events, so root readiness alone is not enough for OAuth setup.
+    await waitForGatewayRootReady(sandbox);
+    await waitForConfiguredChannelRoutesReady({
+      sandbox,
+      slackConfigured: Boolean(slackConfig),
     });
 
     logInfo("sandbox.config_sync_restarted", { sandboxId });
