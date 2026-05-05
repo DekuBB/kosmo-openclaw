@@ -491,6 +491,7 @@ export async function POST(request: Request): Promise<Response> {
           logInfo("channels.slack_fast_path_ok", withOperationContext(op, {
             sandboxId: effectiveMeta.sandboxId,
             responseStatus: resp.status,
+            ackSemantics: "native-handler-accepted",
             ...eventInfo,
           }));
           return Response.json({ ok: true });

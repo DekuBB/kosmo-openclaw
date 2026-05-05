@@ -197,6 +197,65 @@ test("GET /api/admin/logs: sandbox log parsing prefers top-level source over ctx
 // GET /api/admin/logs — structured correlation filters
 // ===========================================================================
 
+test("GET /api/admin/logs: parses native OpenClaw sandbox JSON logs", async () => {
+  await withTestEnv(async () => {
+    const stdout = JSON.stringify({
+      0: "{\"subsystem\":\"channels/slack\"}",
+      1: "slack http mode listening at /slack/events",
+      _meta: {
+        runtime: "node",
+        name: "{\"subsystem\":\"channels/slack\"}",
+        parentNames: ["openclaw"],
+        date: "2026-05-05T22:40:44.539Z",
+        logLevelName: "INFO",
+      },
+      time: "2026-05-05T22:40:44.539+00:00",
+      hostname: "sandbox-host",
+      message: "slack http mode listening at /slack/events",
+      traceId: "trace-abc",
+      spanId: "span-def",
+    });
+
+    _setSandboxControllerForTesting(
+      fakeSandboxController("sandbox-native-openclaw", stdout),
+    );
+    await mutateMeta((meta) => {
+      meta.status = "running";
+      meta.sandboxId = "sandbox-native-openclaw";
+    });
+
+    const route = getAdminLogsRoute();
+    const result = await callRoute(
+      route.GET!,
+      buildAuthGetRequest("/api/admin/logs?source=channels&search=slack%20http%20mode"),
+    );
+
+    assert.equal(result.status, 200);
+    const body = result.json as {
+      diagnostics: { sandbox: { untimedLineCount: number } };
+      logs: Array<{
+        timestamp: number;
+        timestampKind?: string;
+        level: string;
+        source: string;
+        message: string;
+        data?: { subsystem?: string; hostname?: string; traceId?: string; spanId?: string };
+      }>;
+    };
+    assert.equal(body.logs.length, 1);
+    assert.equal(body.logs[0]?.timestamp, Date.parse("2026-05-05T22:40:44.539Z"));
+    assert.equal(body.logs[0]?.timestampKind, "exact");
+    assert.equal(body.logs[0]?.level, "info");
+    assert.equal(body.logs[0]?.source, "channels");
+    assert.equal(body.logs[0]?.message, "slack http mode listening at /slack/events");
+    assert.equal(body.logs[0]?.data?.subsystem, "channels/slack");
+    assert.equal(body.logs[0]?.data?.hostname, "sandbox-host");
+    assert.equal(body.logs[0]?.data?.traceId, "trace-abc");
+    assert.equal(body.logs[0]?.data?.spanId, "span-def");
+    assert.equal(body.diagnostics.sandbox.untimedLineCount, 0);
+  });
+});
+
 test("GET /api/admin/logs: filters by opId", async () => {
   await withTestEnv(async () => {
     logInfo("channels.wake_requested", { opId: "op_abc123", channel: "slack" });

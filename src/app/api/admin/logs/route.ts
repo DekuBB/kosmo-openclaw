@@ -22,17 +22,93 @@ const LOG_FILE_GLOB = "/tmp/openclaw/openclaw-*.log";
  * Parse a raw log line into a structured LogEntry.
  * Expected format: JSON lines with ts/level/msg/ctx, or plain text fallback.
  */
+function parseOpenClawNativeLog(parsed: Record<string, unknown>): {
+  ts?: string;
+  level?: string;
+  source?: string;
+  msg?: string;
+  ctx?: Record<string, unknown>;
+} | null {
+  const meta = parsed._meta as Record<string, unknown> | undefined;
+  const name = meta?.name;
+  const subsystem = typeof name === "string" ? parseSubsystemName(name) : null;
+  const message = typeof parsed.message === "string"
+    ? parsed.message
+    : typeof parsed["1"] === "string"
+      ? parsed["1"]
+      : undefined;
+  const time = typeof parsed.time === "string"
+    ? parsed.time
+    : typeof (meta as { date?: unknown } | undefined)?.date === "string"
+      ? (meta as { date: string }).date
+      : undefined;
+
+  if (!message && !time && !subsystem) {
+    return null;
+  }
+
+  return {
+    ts: time,
+    level: normalizeNativeLevel(meta?.logLevelName),
+    source: subsystem ? sourceFromSubsystem(subsystem) : undefined,
+    msg: message,
+    ctx: {
+      subsystem,
+      ...(typeof parsed.hostname === "string" ? { hostname: parsed.hostname } : {}),
+      ...(typeof parsed.traceId === "string" ? { traceId: parsed.traceId } : {}),
+      ...(typeof parsed.spanId === "string" ? { spanId: parsed.spanId } : {}),
+    },
+  };
+}
+
+function parseSubsystemName(raw: string): string | null {
+  try {
+    const parsed = JSON.parse(raw) as { subsystem?: unknown };
+    return typeof parsed.subsystem === "string" ? parsed.subsystem : null;
+  } catch {
+    return null;
+  }
+}
+
+function sourceFromSubsystem(subsystem: string): LogSource {
+  if (subsystem.startsWith("channels/")) return "channels";
+  if (subsystem.startsWith("gateway")) return "proxy";
+  if (subsystem.startsWith("firewall")) return "firewall";
+  if (subsystem.startsWith("auth")) return "auth";
+  if (subsystem === "diagnostic") return "channels";
+  return "system";
+}
+
+function normalizeNativeLevel(raw: unknown): LogLevel | undefined {
+  if (typeof raw !== "string") return undefined;
+  switch (raw.toUpperCase()) {
+    case "ERROR":
+      return "error";
+    case "WARN":
+      return "warn";
+    case "DEBUG":
+      return "debug";
+    case "INFO":
+      return "info";
+    default:
+      return undefined;
+  }
+}
+
 function parseLogLine(line: string, index: number): LogEntry | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
 
   try {
-    const parsed = JSON.parse(trimmed) as {
-      ts?: string;
-      level?: string;
-      msg?: string;
-      source?: string;
-      ctx?: Record<string, unknown>;
+    const rawParsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const parsed = parseOpenClawNativeLog(rawParsed) ?? {
+      ts: typeof rawParsed.ts === "string" ? rawParsed.ts : undefined,
+      level: typeof rawParsed.level === "string" ? rawParsed.level : undefined,
+      msg: typeof rawParsed.msg === "string" ? rawParsed.msg : undefined,
+      source: typeof rawParsed.source === "string" ? rawParsed.source : undefined,
+      ctx: rawParsed.ctx && typeof rawParsed.ctx === "object"
+        ? rawParsed.ctx as Record<string, unknown>
+        : undefined,
     };
 
     const level = normalizeLevel(parsed.level);

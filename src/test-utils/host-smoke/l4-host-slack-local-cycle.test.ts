@@ -346,6 +346,8 @@ test("L4-host Slack local cycle: fast path, stop, wake workflow, fast path after
       assert.equal(nativeBodies.length, 2, "post-wake Slack message should reach native handler");
       assert.equal(nativeBodies[1], postWakeRawBody);
 
+      const fastPathOkLog = getServerLogs().find((entry) => entry.message === "channels.slack_fast_path_ok");
+      assert.equal(fastPathOkLog?.data?.ackSemantics, "native-handler-accepted");
       const logs = getServerLogs().map((entry) => entry.message);
       assert.ok(logs.includes("channels.slack_fast_path_ok"));
       assert.ok(logs.includes("channels.slack_workflow_started"));
