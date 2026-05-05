@@ -248,6 +248,22 @@ test("setupOpenClaw creates bundle compatibility shims after shared chunks extra
         "model-catalog shim should point to extracted root runtime",
       );
       assert.ok(
+        script.includes("agents/auth-profiles.runtime.js"),
+        "shared chunks setup should create auth-profiles compatibility shim",
+      );
+      assert.ok(
+        script.includes("ensureAuthProfileStore"),
+        "auth-profiles shim should select the auth chunk by export signature",
+      );
+      assert.ok(
+        script.includes("plugins/provider-discovery.runtime.js"),
+        "shared chunks setup should create provider-discovery compatibility shim",
+      );
+      assert.ok(
+        script.includes("export * from '../provider-discovery.runtime.js';"),
+        "provider-discovery shim should point to extracted root runtime",
+      );
+      assert.ok(
         script.includes("getRuntimeConfig as i"),
         "config shim should select the config IO chunk by export signature",
       );

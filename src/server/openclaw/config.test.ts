@@ -1322,6 +1322,22 @@ test("buildFastRestoreScript recreates bundle compatibility shims before gateway
     "expected config compatibility shim",
   );
   assert.ok(
+    script.includes("agents/auth-profiles.runtime.js"),
+    "expected auth-profiles compatibility shim",
+  );
+  assert.ok(
+    script.includes("ensureAuthProfileStore"),
+    "expected auth-profiles chunk detection",
+  );
+  assert.ok(
+    script.includes("plugins/provider-discovery.runtime.js"),
+    "expected provider-discovery compatibility shim",
+  );
+  assert.ok(
+    script.includes("export * from '../provider-discovery.runtime.js';"),
+    "expected provider-discovery shim export",
+  );
+  assert.ok(
     script.includes("getRuntimeConfig as i"),
     "expected config IO chunk detection",
   );
