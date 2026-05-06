@@ -180,6 +180,65 @@ test("getPublicOrigin falls back to VERCEL_PROJECT_PRODUCTION_URL", () => {
   );
 });
 
+test("getPublicOrigin pins to VERCEL_PROJECT_PRODUCTION_URL over request host on Vercel", () => {
+  // Regression: with multiple Vercel aliases the install request can land on
+  // the deployment-hash host while the OAuth callback lands on the project
+  // alias. Cookies set on host A aren't sent to host B → `state_mismatch`.
+  // When no explicit origin is configured and we are on Vercel, prefer the
+  // canonical project production URL so both OAuth legs share an origin.
+  withEnv(
+    {
+      NEXT_PUBLIC_APP_URL: undefined,
+      NEXT_PUBLIC_BASE_DOMAIN: undefined,
+      BASE_DOMAIN: undefined,
+      VERCEL: "1",
+      VERCEL_PROJECT_PRODUCTION_URL:
+        "vercel-openclaw-35.playground-vercel.tools",
+      VERCEL_BRANCH_URL: undefined,
+      VERCEL_URL: undefined,
+    },
+    () => {
+      const request = new Request("https://ignored.example/api/install", {
+        headers: {
+          host: "vercel-openclaw-35-nefh7fjzh.playground-vercel.tools",
+          "x-forwarded-host":
+            "vercel-openclaw-35-nefh7fjzh.playground-vercel.tools",
+          "x-forwarded-proto": "https",
+        },
+      });
+
+      assert.equal(
+        getPublicOrigin(request),
+        "https://vercel-openclaw-35.playground-vercel.tools",
+      );
+    },
+  );
+});
+
+test("getPublicOrigin still uses request host when not on Vercel", () => {
+  withEnv(
+    {
+      NEXT_PUBLIC_APP_URL: undefined,
+      NEXT_PUBLIC_BASE_DOMAIN: undefined,
+      BASE_DOMAIN: undefined,
+      VERCEL: undefined,
+      VERCEL_PROJECT_PRODUCTION_URL: undefined,
+      VERCEL_BRANCH_URL: undefined,
+      VERCEL_URL: undefined,
+    },
+    () => {
+      const request = new Request("https://ignored.example/admin", {
+        headers: {
+          "x-forwarded-host": "preview.example.com",
+          "x-forwarded-proto": "https",
+        },
+      });
+
+      assert.equal(getPublicOrigin(request), "https://preview.example.com");
+    },
+  );
+});
+
 test("getPublicOrigin falls back to x-forwarded-host header", () => {
   withEnv(
     {
