@@ -267,7 +267,13 @@ async function validateSlackCredentialsForRestore(
  */
 async function restartGateway(
   sandbox: SandboxHandle,
+  reason: string = "unspecified",
 ): Promise<void> {
+  const startedAt = Date.now();
+  logInfo("gateway.restart_started", {
+    sandboxId: sandbox.sandboxId,
+    reason,
+  });
   const result = await sandbox.runCommand("bash", [OPENCLAW_GATEWAY_RESTART_SCRIPT_PATH]);
   if (result.exitCode !== 0) {
     throw new CommandFailedError({
@@ -276,6 +282,12 @@ async function restartGateway(
       output: await result.output("both"),
     });
   }
+  logInfo("gateway.restart_completed", {
+    sandboxId: sandbox.sandboxId,
+    durationMs: Date.now() - startedAt,
+    exitCode: result.exitCode,
+    reason,
+  });
 }
 
 async function waitForGatewayRootReady(sandbox: SandboxHandle): Promise<void> {
@@ -305,23 +317,48 @@ async function waitForConfiguredChannelRoutesReady(params: {
     return;
   }
 
+  const channel = "slack";
+  let lastStatus = "000";
+  let lastAttempt = 0;
+  const totalTimeoutMs = 30_000;
+
   await pollUntil({
     label: "config-sync-slack-route-ready",
-    timeoutMs: 30_000,
+    timeoutMs: totalTimeoutMs,
     initialDelayMs: 250,
     maxDelayMs: 1_000,
-    step: async () => {
+    step: async ({ attempt, elapsedMs }) => {
       const result = await params.sandbox.runCommand("bash", [
         "-c",
         `curl -s -o /dev/null -w '%{http_code}' --max-time 2 -X POST http://localhost:${OPENCLAW_PORT}/slack/events 2>/dev/null || echo 000`,
       ]);
       const status = (await result.output("stdout")).trim().slice(-3);
+      lastStatus = status;
+      lastAttempt = attempt;
+      logInfo("gateway.route_probe", {
+        channel,
+        status,
+        attempt,
+        elapsedMs,
+      });
       if (status === "400" || status === "401" || status === "403") {
         return { done: true, result: true };
       }
       return { done: false };
     },
-    timeoutError: () => new Error("Slack route did not become ready after config sync restart"),
+    timeoutError: ({ attempt, elapsedMs }) => {
+      const attempts = attempt > 0 ? attempt : lastAttempt;
+      const totalMs = elapsedMs > 0 ? elapsedMs : totalTimeoutMs;
+      logWarn("gateway.route_ready_timeout", {
+        channel,
+        lastStatus,
+        attempts,
+        totalMs,
+      });
+      return new Error(
+        `${channel} route never returned 2xx after ${attempts} attempts (${totalMs}ms; last status: ${lastStatus})`,
+      );
+    },
   });
 }
 
@@ -1117,12 +1154,8 @@ export async function syncGatewayConfigToSandbox(): Promise<LiveConfigSyncResult
     // Without this, hot-reload restarts the channel provider but does not
     // wire up new routes like /slack/events.
     const restartStartedAt = Date.now();
-    logInfo("gateway.restart_started", {
-      sandboxId,
-      reason: "config-sync",
-    });
     try {
-      await restartGateway(sandbox);
+      await restartGateway(sandbox, "config-sync");
     } catch (restartErr) {
       logWarn("sandbox.config_sync_restart_failed", {
         sandboxId,
@@ -1136,11 +1169,6 @@ export async function syncGatewayConfigToSandbox(): Promise<LiveConfigSyncResult
         operatorMessage: "Credentials were saved, but the running sandbox did not restart cleanly. Live routes may still be stale until the next successful restart.",
       };
     }
-    logInfo("gateway.restart_completed", {
-      sandboxId,
-      durationMs: Date.now() - restartStartedAt,
-      reason: "config-sync",
-    });
 
     // Invalidate cached port URLs. Even if `sandbox.domain(port)` returns
     // the same URL after restart, clearing the cache forces a fresh

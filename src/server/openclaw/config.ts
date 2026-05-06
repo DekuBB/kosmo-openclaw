@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { getProtectionBypassSecret } from "@/server/public-url";
+import { logInfo } from "@/server/log";
 
 const OPENCLAW_PORT = 3000;
 
@@ -352,7 +353,7 @@ function buildGatewayLaunchShell(): string {
  * full startup script.
  */
 export function buildGatewayRestartScript(): string {
-  return `#!/bin/bash
+  const script = `#!/bin/bash
 set -euo pipefail
 ${buildNetLearnWriteShell()}
 ${buildGatewayEnvShell()}
@@ -360,6 +361,12 @@ ${buildClearStaleGatewayLockShell()}
 ${buildGatewayKillShell()}
 ${buildGatewayLaunchShell()}
 `;
+  logInfo("gateway.restart_script_built", {
+    staleLockCleanup: true,
+    scriptHash: createHash("sha256").update(script).digest("hex").slice(0, 12),
+    port: OPENCLAW_PORT,
+  });
+  return script;
 }
 
 export type WhatsAppGatewayConfig = {
@@ -637,7 +644,20 @@ export function buildGatewayConfig(
     config.channels = channels;
   }
 
-  return JSON.stringify(config);
+  const serialized = JSON.stringify(config);
+  const pluginsBlock = config.plugins as
+    | { bundledDiscovery?: unknown; allow?: unknown }
+    | undefined;
+  const channelsBlock = (config.channels as Record<string, unknown> | undefined) ?? {};
+  logInfo("gateway.config_built", {
+    bundledDiscovery: Boolean(pluginsBlock?.bundledDiscovery),
+    allow: Array.isArray(pluginsBlock?.allow)
+      ? (pluginsBlock.allow as unknown[]).length
+      : 0,
+    channels: Object.keys(channelsBlock),
+    configHash: createHash("sha256").update(serialized).digest("hex").slice(0, 12),
+  });
+  return serialized;
 }
 
 export const GATEWAY_CONFIG_HASH_VERSION = 1;

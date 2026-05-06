@@ -2073,6 +2073,15 @@ async function forwardToNativeHandlerWithRetry(
         transport,
         classification,
       });
+      logInfo("channels.forward_attempt", {
+        channel,
+        attempt,
+        transport,
+        status: result.status,
+        classification,
+        elapsedMs: Date.now() - attemptStartedAt,
+        deliveryId,
+      });
       if (result.status >= 502 || isHandlerNotReady || swallowed) {
         const reason = classification;
         const entry = { attempt, reason, status: result.status };

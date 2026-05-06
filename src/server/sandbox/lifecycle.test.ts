@@ -4397,7 +4397,7 @@ test("syncGatewayConfigToSandbox degrades when Slack route stays unregistered", 
 
     assert.equal(result.outcome, "failed");
     assert.equal(result.liveConfigFresh, false);
-    assert.match(result.reason, /Slack route did not become ready/);
+    assert.match(result.reason, /slack route never returned 2xx/);
   });
 });
 
