@@ -397,12 +397,32 @@ export function buildClearStaleGatewayLockShell(): string {
  *  Uses the shell variables exported by buildGatewayEnvShell() so the
  *  conditional API-key logic is honoured.
  *
- *  Kill uses ps/grep/kill instead of pkill because pkill returns exit 255
+ *  Kill uses ps/awk/kill instead of pkill because pkill returns exit 255
  *  on the v2 sandbox API, which breaks scripts under set -euo pipefail
- *  even with `|| true`. */
+ *  even with `|| true`.
+ *
+ *  Two match strategies, both required:
+ *
+ *  1. argv match (`/[o]penclaw\.bundle\.mjs gateway/`) — catches the
+ *     gateway BEFORE the bundle calls `process.title = "openclaw"`,
+ *     when ps still shows the original `node openclaw.bundle.mjs gateway`
+ *     command line.
+ *  2. comm match (`$2 == "openclaw"`) — catches it AFTER the bundle has
+ *     overwritten the title. Without this branch, ps shows just
+ *     `openclaw` in the COMMAND column and the argv pattern misses; the
+ *     kill silently no-ops, the new gateway can't bind port 3000, and
+ *     dies as a zombie. Observed in the wild on openclaw-42: configSync's
+ *     post-OAuth restart left zero plugins loaded because the old
+ *     gateway was never killed and the new one died on port conflict,
+ *     so `/slack/events` stayed 404 forever.
+ *
+ *  The `[o]penclaw` regex trick prevents the awk pipeline from matching
+ *  itself.  awk in $2/comm comparison is a literal string match, so the
+ *  comparison string `"openclaw"` does not match the awk command line
+ *  through any regex either. */
 function buildGatewayKillShell(): string {
   return [
-    '_gw_pids="$(ps aux | grep -E \'[o]penclaw\.gateway|[o]penclaw\.bundle\.mjs gateway\' | awk \'{print $2}\' || true)"',
+    `_gw_pids="$(ps -eo pid,comm,args 2>/dev/null | awk '/[o]penclaw\\.bundle\\.mjs gateway/ {print $1; next} $2 == "openclaw" {print $1}' | sort -u | tr "\\n" " " || true)"`,
     'if [ -n "$_gw_pids" ]; then kill $_gw_pids 2>/dev/null; sleep 1; fi',
     'true',
   ].join("\n");
@@ -1071,13 +1091,20 @@ fi
 _kill_started=\$(date +%s%N 2>/dev/null || echo 0)
 _killed_existing_gateway=0
 _sleep_ms=0
+# Match by argv (pre-title-overwrite) AND by process.title=="openclaw"
+# (post-title-overwrite). pkill -f / pgrep -f match against /proc/PID/
+# cmdline, which the bundle's process.title write replaces with just
+# "openclaw\\0\\0..." — so -f against the bundle path silently misses
+# any gateway that has already booted past its title init. Match on
+# comm via -x as the second pass to catch the post-init form. See
+# buildGatewayKillShell() above for the full rationale.
 _gateway_process_pattern='openclaw.gateway|openclaw.bundle.mjs gateway'
-if pkill -f "$_gateway_process_pattern" 2>/dev/null; then
+if pkill -f "$_gateway_process_pattern" 2>/dev/null || pkill -x openclaw 2>/dev/null; then
   _killed_existing_gateway=1
   # Poll for process death instead of fixed 1-second sleep.
   # pgrep exits non-zero when no matching process exists.
   _wait_deadline=\$(( \$(date +%s) + 3 ))
-  while pgrep -f "$_gateway_process_pattern" > /dev/null 2>&1; do
+  while pgrep -f "$_gateway_process_pattern" > /dev/null 2>&1 || pgrep -x openclaw > /dev/null 2>&1; do
     if [ "\$(date +%s)" -ge "\$_wait_deadline" ]; then
       _sleep_ms=3000
       break

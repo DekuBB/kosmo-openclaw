@@ -142,6 +142,22 @@ This makes rollback and review sane and forces honest scoping.
 3. **`GET /api/admin/sandbox-diag`** — per-port handler probes. Tells you whether port 3000 returns 200 (gateway up), 401 (Slack handler bound, signature-required), 404 (gateway up but handler not registered), or "Not listening" (sandbox port dead).
 4. **`GET /api/admin/logs`** — structured ring buffer. Filter by event prefix: `channels.`, `gateway.`, `sandbox.`, `proxy.`. The new instrumentation (commit `37b467f`) means every silent transition now emits a structured event.
 
+### Plugin-loading wedge: zero plugins after configSync restart (openclaw-42)
+
+**Symptom:** Slack OAuth completes, configSync writes `openclaw.json` with `channels.slack`, but `/slack/events` returns 404 forever (70 attempts, 30s, last status 404). `lastForward.classification: "exhausted" finalReasonHead: "Not Found"`. Sandbox-diag: gateway port 3000 returns 200, slack port returns 404 "Handler not registered yet". Inside the sandbox: gateway log shows `http server listening (0 plugins, 1.2s)` and a chain of `[openclaw] <defunct>` zombies.
+
+**Root cause:** `buildGatewayKillShell` (`src/server/openclaw/config.ts:403`) used a grep pattern `[o]penclaw\.gateway|[o]penclaw\.bundle\.mjs gateway` to find the running gateway. The bundle calls `process.title = "openclaw"` early in boot, which overwrites argv[0] in `/proc/PID/cmdline` (and therefore `ps aux`'s COMMAND column) — so `ps aux | grep` finds nothing post-title-init. The kill silently no-ops; the new gateway spawned by `setsid node openclaw.bundle.mjs gateway --port 3000` collides with the still-running old one on port 3000, dies, becomes a zombie. The original gateway (from initial bootstrap, before any channel was configured) keeps running with **zero plugins** and never gets the slack route registered. The same bug is duplicated in the fast-restore script's `pkill -f`/`pgrep -f` block.
+
+**Fix:** kill must match BOTH the pre-title-overwrite argv form (`/[o]penclaw\.bundle\.mjs gateway/`) AND the post-title-overwrite comm form (`$2 == "openclaw"` in `ps -eo pid,comm,args`, plus `pkill -x openclaw` / `pgrep -x openclaw` for the fast-restore path). The `[o]penclaw` regex trick still excludes the awk pipeline from matching itself.
+
+**Diagnostic checklist** when `lastForward.classification === "exhausted"` and `finalReasonHead === "Not Found"`:
+1. `sandbox-diag` shows port 3000 = 200 but slack port = 404? → handler missing.
+2. SSH `ps aux | grep openclaw` — multiple `[openclaw] <defunct>` zombies? → restart script can't kill the running gateway.
+3. SSH `tail /tmp/openclaw/openclaw-*.log` — boot sequence stops at `"starting..."` without ever reaching `"starting HTTP server..."`? → new gateway died on port-conflict.
+4. SSH `cat /home/vercel-sandbox/.openclaw/openclaw.json | grep channels` — config has `channels.slack`? → wrapper-side config is correct, this is a runtime kill bug.
+
+If all four match, you're seeing the openclaw-42 wedge. The deployed code already has the fix (commit after this CLAUDE.md update); existing sandboxes need either `POST /api/admin/reset` (regenerates the script and re-bootstraps) or a manual SSH `kill <pid>` of the old gateway followed by `bash /home/vercel-sandbox/.openclaw/.restart-gateway.sh`.
+
 ### The three failure modes that used to look identical
 
 Before the observability pass, all three surfaced as `"Slack route did not become ready after config sync restart"`. They are very different:

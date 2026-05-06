@@ -444,6 +444,23 @@ test("buildGatewayRestartScript kills existing gateway and relaunches it", () =>
   assert.ok(script.includes("gateway --port 3000 --bind loopback"), "restart script should launch the gateway");
 });
 
+test("buildGatewayRestartScript kill matches both pre- and post-title-overwrite forms", () => {
+  // The bundle calls process.title="openclaw" early in boot, which
+  // overwrites argv[0] in /proc/PID/cmdline. The kill grep must match
+  // the post-title form (`comm == "openclaw"`) OR the bundle would
+  // never get killed and the new gateway would die on port-conflict.
+  // This was the openclaw-42 plugin-loading bug.
+  const script = buildGatewayRestartScript();
+  assert.ok(
+    /\$2 == "openclaw"/.test(script),
+    "kill must compare comm column to literal 'openclaw' to catch post-title-overwrite gateways",
+  );
+  assert.ok(
+    /\[o\]penclaw\\\.bundle\\\.mjs gateway/.test(script),
+    "kill must also match the original argv form via the [o]penclaw self-exclusion trick",
+  );
+});
+
 test("gateway launch scripts do not select a non-existent none harness", () => {
   assert.ok(
     !buildStartupScript().includes("OPENCLAW_AGENT_RUNTIME=\"none\""),
