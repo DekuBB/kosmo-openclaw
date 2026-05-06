@@ -147,6 +147,33 @@ export function resolvePublicOrigin(
     };
   }
 
+  // When running on Vercel without an explicit canonical origin configured,
+  // pin the public origin to VERCEL_PROJECT_PRODUCTION_URL (the stable
+  // project alias) rather than the incoming request host. Vercel deployments
+  // are reachable via multiple aliases (deployment-hash URL, branch URL,
+  // project alias). If we derive the origin from the request, OAuth state
+  // cookies set during /install land on alias A while the redirect_uri sent
+  // to Slack might resolve to alias B at callback time, producing
+  // `state_mismatch`. Pinning to the project production URL makes both legs
+  // of the OAuth handshake share the same origin (and thus the same cookie
+  // jar) regardless of which alias the user typed.
+  const onVercel = Boolean(
+    process.env.VERCEL?.trim() || process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim(),
+  );
+  const productionUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  if (onVercel && productionUrl) {
+    return {
+      origin: normalizeOrigin(productionUrl),
+      source: "VERCEL_PROJECT_PRODUCTION_URL",
+      authMode,
+      requestHost,
+      requestProto,
+      explicitValue: null,
+      vercelHost: productionUrl,
+      bypassEnabled,
+    };
+  }
+
   if (requestForwardedHost) {
     return {
       origin: normalizeOrigin(
