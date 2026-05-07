@@ -202,6 +202,47 @@ test("processChannelStep skips ensureSandboxReady when boot returns running", as
   assert.equal(forwardedSandboxId, "sbx-booted");
 });
 
+test("processChannelStep clears Telegram boot message after accepted forward", async () => {
+  let updateCalls = 0;
+  let clearCalls = 0;
+
+  const dependencies = createWorkflowDependencies({
+    buildExistingBootHandle: async () => ({
+      async update() {
+        updateCalls += 1;
+      },
+      async clear() {
+        clearCalls += 1;
+      },
+    }),
+    runWithBootMessages: async () => ({
+      meta: asMeta({ status: "running", sandboxId: "sbx-telegram-accepted" }),
+      bootMessageSent: true,
+    }),
+    forwardToNativeHandlerWithRetry: async (): Promise<RetryingForwardResult> => ({
+      ok: true,
+      status: 200,
+      attempts: 1,
+      totalMs: 50,
+      transport: "local",
+      retries: [],
+    }),
+  });
+
+  await processChannelStep("telegram", { update_id: 1 }, "test", "req-clear", 17, {
+    dependencies,
+  });
+
+  assert.equal(updateCalls, 0, "accepted Telegram forward should not leave an Almost Ready edit");
+  assert.equal(clearCalls, 1, "accepted Telegram forward should delete the boot placeholder");
+
+  const logs = getServerLogs();
+  assert.ok(
+    logs.some((entry) => entry.message === "channels.telegram_boot_message_cleared_after_accept"),
+    "cleanup success should be logged",
+  );
+});
+
 test("processChannelStep falls back to ensureSandboxReady when boot returns non-running", async () => {
   let ensureCalls = 0;
   let forwardedSandboxId: string | null = null;

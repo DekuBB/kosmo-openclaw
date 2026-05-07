@@ -1248,11 +1248,11 @@ export async function processChannelStep(
       });
     }
 
-    // Boot-message cleanup. Slack/Telegram keep a "dead-time" status message
-    // visible while OpenClaw/Claude generates the real reply (~5s). For Slack
-    // we store the boot-message ts under a thread-keyed Redis entry so the
-    // Slack webhook can delete it when OpenClaw's reply event arrives. For
-    // Telegram there is no bot-message webhook signal, so the message stays.
+    // Boot-message cleanup. Slack keeps a "dead-time" status message visible
+    // while OpenClaw/Claude generates the real reply (~5s), then the Slack
+    // webhook deletes it when OpenClaw's reply event arrives. Telegram has no
+    // bot-message webhook signal, so the workflow must clear the placeholder
+    // as soon as the native handler accepts the update.
     if (existingBootHandle) {
       if (channel === "slack" && forwardResult.ok) {
         await existingBootHandle
@@ -1297,8 +1297,30 @@ export async function processChannelStep(
         }
       } else if (channel === "telegram" && forwardResult.ok) {
         await existingBootHandle
-          .update("🦞 Almost ready\u2026")
-          .catch(() => {});
+          .clear()
+          .then(() => {
+            logInfo("channels.telegram_boot_message_cleared_after_accept", {
+              channel,
+              requestId,
+              deliveryId,
+              forwardStatus: forwardResult.status,
+              forwardAttempts: retryingResult?.attempts ?? null,
+              forwardTransport: retryingResult?.transport ?? null,
+            });
+          })
+          .catch((bootError) => {
+            logWarn("channels.telegram_boot_message_cleanup_failed", {
+              channel,
+              requestId,
+              deliveryId,
+              phase: "accepted-forward",
+              forwardStatus: forwardResult.status,
+              error:
+                bootError instanceof Error
+                  ? bootError.message
+                  : String(bootError),
+            });
+          });
       } else {
         // Forward failed. Instead of silently deleting the boot message
         // (which left the user staring at an empty channel after their
