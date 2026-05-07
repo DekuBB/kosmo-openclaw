@@ -218,15 +218,19 @@ export async function POST(request: Request): Promise<Response> {
     // silent drop is worse than the (low) risk of duplicate delivery through
     // the workflow path.
     let effectiveMeta = meta;
-    // Gate the fast-path on BOTH status=running AND proof the Telegram handler
-    // on port 8787 actually bound during the last restore.  Without this check,
-    // the webhook races ahead while lifecycle.ts is still re-registering the
-    // Telegram webhook and syncing the secret, causing early forwards to land
-    // on a half-ready handler.  telegramListenerReady is set by the fast-restore
-    // script (config.ts:~927) after it proves a local 401 on the 8787 route.
+    // The fast path should use the live 8787 surface whenever the wrapper
+    // believes the sandbox is running. Restore metrics can be absent on fresh
+    // creates or stale after recovery, so they are logged as evidence but do
+    // not gate warm delivery. If 8787 is actually not ready, the forward below
+    // records the concrete failure and falls through to the workflow path.
     const telegramListenerReady =
       effectiveMeta.lastRestoreMetrics?.telegramListenerReady === true;
-    if (effectiveMeta.status === "running" && effectiveMeta.sandboxId && telegramListenerReady) {
+    const telegramListenerReadinessState = effectiveMeta.lastRestoreMetrics
+      ? telegramListenerReady
+        ? "verified"
+        : "not-ready"
+      : "unverified";
+    if (effectiveMeta.status === "running" && effectiveMeta.sandboxId) {
       let portUrlStaleMarked = false;
       let fastPathSandboxWebhookUrl: string | null = null;
       const fastPathStartedAt = Date.now();
@@ -238,6 +242,13 @@ export async function POST(request: Request): Promise<Response> {
         const sandboxWebhookUrl = await getSandboxDomain(OPENCLAW_TELEGRAM_WEBHOOK_PORT);
         fastPathSandboxWebhookUrl = sandboxWebhookUrl;
         const forwardUrl = `${sandboxWebhookUrl}/telegram-webhook`;
+        logInfo("channels.telegram_fast_path_forwarding", withOperationContext(op, {
+          sandboxId: effectiveMeta.sandboxId,
+          forwardUrl,
+          telegramListenerReady,
+          telegramListenerReadinessState,
+          hasPort8787Url: Boolean(effectiveMeta.portUrls?.[String(OPENCLAW_TELEGRAM_WEBHOOK_PORT)]),
+        }));
         await refreshChannelFastPathGatewayToken({
           channel: "telegram",
           requestId: requestId ?? null,
@@ -424,9 +435,7 @@ export async function POST(request: Request): Promise<Response> {
         reason:
           effectiveMeta.status !== "running"
             ? `sandbox_status_${effectiveMeta.status}`
-            : !effectiveMeta.sandboxId
-              ? "no_sandbox_id"
-              : "listener_not_ready",
+            : "no_sandbox_id",
         status: effectiveMeta.status,
         sandboxId: effectiveMeta.sandboxId,
         telegramListenerReady,

@@ -205,10 +205,10 @@ test("Telegram webhook: fast path connection failure reconciles status and start
 });
 
 // ===========================================================================
-// Fast-path gate: requires lastRestoreMetrics.telegramListenerReady === true
+// Fast-path gate: running sandbox attempts live 8787 forward
 // ===========================================================================
 
-test("Telegram webhook: fast path does NOT fire when telegramListenerReady is missing", async () => {
+test("Telegram webhook: fast path fires when telegramListenerReady is missing", async () => {
   await withHarness(async (h) => {
     await configureTelegram(h);
     // status=running + sandbox + portUrls present but lastRestoreMetrics is missing.
@@ -241,13 +241,13 @@ test("Telegram webhook: fast path does NOT fire when telegramListenerReady is mi
       assert.equal(result.status, 200);
       assert.equal(
         fastPathForwardCount,
-        0,
-        "fast-path must NOT forward when lastRestoreMetrics is missing",
+        1,
+        "fast-path should use the live 8787 surface when restore metrics are missing",
       );
       assert.equal(
         startMock.mock.callCount(),
-        1,
-        "request must fall through to workflow path when listener readiness is unproven",
+        0,
+        "workflow must not start when the live 8787 forward succeeds",
       );
       resetAfterCallbacks();
     } finally {
@@ -256,7 +256,7 @@ test("Telegram webhook: fast path does NOT fire when telegramListenerReady is mi
   });
 });
 
-test("Telegram webhook: fast path does NOT fire when telegramListenerReady !== true", async () => {
+test("Telegram webhook: fast path fires when telegramListenerReady is stale false", async () => {
   await withHarness(async (h) => {
     await configureTelegram(h);
     // status=running but listener readiness was NOT proven during restore.
@@ -303,13 +303,13 @@ test("Telegram webhook: fast path does NOT fire when telegramListenerReady !== t
       assert.equal(result.status, 200);
       assert.equal(
         fastPathForwardCount,
-        0,
-        "fast-path must NOT forward when telegramListenerReady !== true",
+        1,
+        "fast-path should test the live 8787 surface even when restore readiness is stale false",
       );
       assert.equal(
         startMock.mock.callCount(),
-        1,
-        "request must fall through to workflow path when listener readiness is not true",
+        0,
+        "workflow must not start when the live 8787 forward succeeds",
       );
       resetAfterCallbacks();
     } finally {
