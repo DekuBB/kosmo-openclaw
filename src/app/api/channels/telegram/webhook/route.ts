@@ -319,7 +319,7 @@ export async function POST(request: Request): Promise<Response> {
         // Classify the failure using the same rules as Slack so the
         // forward outcome record is consistent across channels.
         const isSandboxNotListening =
-          /^This sandbox is not listening/.test(forwardBody);
+          /sandbox is not listening/i.test(forwardBody);
         const fallbackClassification: string = isSandboxNotListening
           ? "sandbox-not-listening"
           : forwardResponse.status >= 502

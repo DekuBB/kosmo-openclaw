@@ -2088,7 +2088,7 @@ async function forwardToNativeHandlerWithRetry(
       const isSandboxNotListening =
         result.status === 502
         && typeof result.bodyHead === "string"
-        && result.bodyHead.includes("sandbox is not listening");
+        && /sandbox is not listening/i.test(result.bodyHead);
       const classification = swallowed
         ? "swallowed-by-base-server"
         : isSandboxNotListening

@@ -464,9 +464,8 @@ test("Telegram webhook: fast path non-ok response falls through to workflow wake
       meta.snapshotId = "snap-telegram-non-ok";
       meta.portUrls = {
         "3000": "https://sbx-telegram-non-ok-3000.fake.vercel.run",
-        "8787": "https://sbx-telegram-non-ok-8787.fake.vercel.run",
+        "8787": "https://stale-telegram-8787.fake.vercel.run",
       };
-      // Fast-path requires telegramListenerReady=true to fire.
       meta.lastRestoreMetrics = {
         sandboxCreateMs: 0,
         tokenWriteMs: 0,
@@ -486,7 +485,16 @@ test("Telegram webhook: fast path non-ok response falls through to workflow wake
     });
 
     h.fakeFetch.onPost(/telegram-webhook$/, () =>
-      new Response("bad gateway", { status: 502 }),
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "502",
+            id: "fra1:iad1::87bgt-test",
+            message: "This sandbox is not listening on the requested port.",
+          },
+        }),
+        { status: 502, headers: { "content-type": "application/json" } },
+      ),
     );
 
     const route = getTelegramWebhookRoute();
@@ -501,6 +509,33 @@ test("Telegram webhook: fast path non-ok response falls through to workflow wake
         startMock.mock.callCount(),
         1,
         "workflow MUST start when native handler returned non-2xx so the update is not silently dropped",
+      );
+      const logs = getServerLogs();
+      const gatewayErrorLog = logs.find(
+        (entry) => entry.message === "channels.telegram_fast_path_gateway_error",
+      );
+      assert.ok(gatewayErrorLog, "gateway error log should be emitted");
+      assert.equal(gatewayErrorLog.data?.classification, "sandbox-not-listening");
+      assert.match(
+        String(gatewayErrorLog.data?.bodyHead ?? ""),
+        /sandbox is not listening/i,
+      );
+      const staleLog = logs.find((entry) => entry.message === "sandbox.port_url_dead");
+      assert.ok(staleLog, "stale Telegram port URL should be invalidated");
+      assert.equal(staleLog.data?.port, 8787);
+      assert.equal(staleLog.data?.reason, "fast-path-not-listening");
+      assert.equal(
+        staleLog.data?.cachedUrl,
+        "https://stale-telegram-8787.fake.vercel.run",
+      );
+      const refreshLog = logs.find((entry) => entry.message === "sandbox.port_urls.refreshed");
+      assert.ok(refreshLog, "Telegram port URL should be refreshed after stale invalidation");
+      assert.equal(refreshLog.data?.port, 8787);
+      const meta = await h.getMeta();
+      assert.equal(
+        meta.portUrls?.["8787"],
+        "https://sbx-telegram-non-ok-8787.fake.vercel.run",
+        "stale Telegram port URL should be replaced before workflow retry",
       );
       resetAfterCallbacks();
     } finally {
