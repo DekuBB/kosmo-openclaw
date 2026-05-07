@@ -123,6 +123,30 @@ function buildChannelReport(
       });
     }
 
+    if (
+      channel === "telegram" &&
+      meta.lastRestoreMetrics?.telegramExpected === true &&
+      meta.lastRestoreMetrics.telegramListenerReady !== true
+    ) {
+      blockers.push({
+        kind: "handler_not_ready",
+        detail: "Telegram native listener on port 8787 was expected but not confirmed ready.",
+        evidence: {
+          telegramExpected: meta.lastRestoreMetrics.telegramExpected,
+          telegramConfigPresent: meta.lastRestoreMetrics.telegramConfigPresent ?? null,
+          telegramListenerReady: meta.lastRestoreMetrics.telegramListenerReady ?? null,
+          telegramListenerStatus: meta.lastRestoreMetrics.telegramListenerStatus ?? null,
+          telegramListenerError: meta.lastRestoreMetrics.telegramListenerError ?? null,
+          restoreMetricsRecordedAt: meta.lastRestoreMetrics.recordedAt,
+          sandboxPath: "/telegram-webhook",
+          sandboxPort: 8787,
+        },
+        firstObservedAt: meta.lastRestoreMetrics.recordedAt,
+        suggestedAction:
+          "Trigger config-sync or reset the sandbox, then check gateway.route_probe and Telegram webhook startup logs.",
+      });
+    }
+
     const recentlyAccepted = isRecentForwardOk(lastForward, now);
     if (
       liveConfigSync?.outcome === "failed" &&

@@ -33,6 +33,7 @@ import {
   buildReasoningScript,
   buildCompareSkill,
 	buildCompareScript,
+  buildImageGenScript,
   OPENCLAW_BUNDLE_PATH,
   OPENCLAW_BUNDLED_PLUGINS_DIR_PATH,
   OPENCLAW_FORCE_PAIR_SCRIPT_PATH,
@@ -303,6 +304,14 @@ test("buildTtsScript uses AI Gateway and outputs MEDIA line", () => {
   const script = buildTtsScript();
   assert.ok(script.includes("ai-gateway.vercel.sh/v1/audio/speech"));
   assert.ok(script.includes("MEDIA:"));
+});
+
+test("buildImageGenScript emits workspace-relative MEDIA lines when possible", () => {
+  const script = buildImageGenScript();
+  assert.ok(script.includes("function toMediaReference"));
+  assert.ok(script.includes("path.relative(process.cwd(), resolved)"));
+  assert.ok(script.includes("MEDIA:"));
+  assert.ok(!script.includes('console.log("MEDIA:" + path.resolve(f))'));
 });
 
 test("buildStructuredExtractSkill returns valid skill metadata", () => {

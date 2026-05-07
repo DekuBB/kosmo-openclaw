@@ -4362,6 +4362,52 @@ test("syncGatewayConfigToSandbox waits for Slack route registration after restar
   });
 });
 
+test("syncGatewayConfigToSandbox waits for Telegram listener registration after restart", async () => {
+  await withHarness(async (h) => {
+    process.env.NEXT_PUBLIC_BASE_DOMAIN = "test.example.com";
+    await h.driveToRunning();
+    await h.mutateMeta((meta) => {
+      meta.channels.telegram = {
+        botToken: "tg-token",
+        webhookSecret: "tg-secret",
+        webhookUrl: "https://app.example.com/api/channels/telegram/webhook",
+        botUsername: "test_bot",
+        configuredAt: Date.now(),
+      };
+    });
+
+    const meta = await h.getMeta();
+    assert.ok(meta.sandboxId, "sandbox should be running");
+    const handle = h.controller.getHandle(meta.sandboxId);
+    assert.ok(handle, "sandbox handle should exist");
+
+    let telegramRouteProbeCount = 0;
+    handle.responders.push((cmd, args) => {
+      if (cmd !== "bash" || args?.[0] !== "-c") {
+        return undefined;
+      }
+      const script = args[1] ?? "";
+      if (script.includes(`http://localhost:3000/`) && script.includes("openclaw-app")) {
+        return { exitCode: 0, output: async () => "ok" };
+      }
+      if (script.includes("/telegram-webhook")) {
+        telegramRouteProbeCount += 1;
+        const status = telegramRouteProbeCount >= 2 ? "401" : "000";
+        return { exitCode: 0, output: async () => status };
+      }
+      return undefined;
+    });
+
+    const result = await syncGatewayConfigToSandbox();
+
+    assert.equal(result.outcome, "applied");
+    assert.equal(telegramRouteProbeCount, 2);
+    const updated = await h.getMeta();
+    assert.equal(updated.lastRestoreMetrics?.telegramListenerReady, true);
+    assert.equal(updated.lastRestoreMetrics?.telegramListenerStatus, 401);
+  });
+});
+
 test("syncGatewayConfigToSandbox degrades when Slack route stays unregistered", async () => {
   await withHarness(async (h) => {
     process.env.NEXT_PUBLIC_BASE_DOMAIN = "test.example.com";
@@ -4397,7 +4443,7 @@ test("syncGatewayConfigToSandbox degrades when Slack route stays unregistered", 
 
     assert.equal(result.outcome, "failed");
     assert.equal(result.liveConfigFresh, false);
-    assert.match(result.reason, /slack route never returned 2xx/);
+    assert.match(result.reason, /slack route never returned ready status/);
   });
 });
 

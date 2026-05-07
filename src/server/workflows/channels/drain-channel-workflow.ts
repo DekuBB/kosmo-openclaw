@@ -1431,6 +1431,8 @@ type TelegramForwardProbeJson = {
   headers?: DiagnosticHeaders | null;
   error?: string | null;
   detail?: string | null;
+  processSnapshot?: string | null;
+  logTail?: string | null;
 };
 
 function parseWorkflowJson<T>(stdout: string): T | null {
@@ -1454,6 +1456,9 @@ export type ForwardAttemptDetail = {
   transport: "public" | "local";
   classification: string;
   error?: string | null;
+  detail?: string | null;
+  processSnapshot?: string | null;
+  logTail?: string | null;
 };
 
 function pickDiagnosticHeaders(headers: Headers): DiagnosticHeaders {
@@ -1465,6 +1470,10 @@ function pickDiagnosticHeaders(headers: Headers): DiagnosticHeaders {
     via: headers.get("via"),
     cacheControl: headers.get("cache-control"),
   };
+}
+
+function optionalDiagnosticString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 /**
@@ -1673,6 +1682,8 @@ async function forwardTelegramToNativeHandlerLocally(
   headers: DiagnosticHeaders | null;
   error?: string | null;
   detail?: string | null;
+  processSnapshot?: string | null;
+  logTail?: string | null;
 }> {
   try {
     const [{ getSandboxController }, { OPENCLAW_TELEGRAM_INTERNAL_WEBHOOK_PATH, OPENCLAW_TELEGRAM_WEBHOOK_PORT }] = await Promise.all([
@@ -1697,6 +1708,22 @@ function pick(headers) {
     cacheControl: headers.get("cache-control"),
   };
 }
+async function collectFailureContext() {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  const run = async (cmd, args) => {
+    try {
+      const out = await execFileAsync(cmd, args, { timeout: 2000, maxBuffer: 64 * 1024 });
+      return String(out.stdout || "").trim().slice(-4000);
+    } catch (error) {
+      return String(error && error.message ? error.message : error).slice(-1000);
+    }
+  };
+  const processSnapshot = await run("sh", ["-c", "ps -eo pid,comm,args | grep -E '[o]penclaw|[n]ode|[t]elegram' | tail -40"]);
+  const logTail = await run("sh", ["-c", "tail -120 /tmp/openclaw/openclaw-*.log /tmp/openclaw.log 2>/dev/null | grep -Ei 'telegram|webhook|8787|plugin|error|failed|listen|exception' | tail -80"]);
+  return { processSnapshot, logTail };
+}
 fetch(url, {
   method: "POST",
   headers,
@@ -1704,6 +1731,7 @@ fetch(url, {
   signal: AbortSignal.timeout(5000),
 }).then(async (response) => {
   const text = await response.text().catch(() => "");
+  const context = response.ok ? { processSnapshot: null, logTail: null } : await collectFailureContext();
   process.stdout.write(JSON.stringify({
     ok: response.ok,
     status: response.status,
@@ -1712,9 +1740,12 @@ fetch(url, {
     bodyHead: text.slice(0, 300),
     headers: pick(response.headers),
     error: null,
+    detail: null,
+    processSnapshot: context.processSnapshot,
+    logTail: context.logTail,
   }));
 }).catch((error) => {
-  process.stdout.write(JSON.stringify({
+  collectFailureContext().then((context) => process.stdout.write(JSON.stringify({
     ok: false,
     status: 0,
     durationMs: Date.now() - startedAt,
@@ -1725,7 +1756,9 @@ fetch(url, {
     detail: error instanceof Error && "cause" in error
       ? String((error as Error & { cause?: unknown }).cause ?? "")
       : null,
-  }));
+    processSnapshot: context.processSnapshot,
+    logTail: context.logTail,
+  })));
 });
 `.trim();
     const result = await sandbox.runCommand("node", [
@@ -1750,6 +1783,8 @@ fetch(url, {
       headers: parsed?.headers ?? null,
       error: parsed?.error ?? null,
       detail: parsed?.detail ?? null,
+      processSnapshot: parsed?.processSnapshot ?? null,
+      logTail: parsed?.logTail ?? null,
     };
   } catch (error) {
     return {
@@ -1764,6 +1799,8 @@ fetch(url, {
         error instanceof Error && "cause" in error
           ? String((error as Error & { cause?: unknown }).cause ?? "")
           : null,
+      processSnapshot: null,
+      logTail: null,
     };
   }
 }
@@ -1974,6 +2011,9 @@ async function forwardToNativeHandlerWithRetry(
     bodyHead: string;
     headers: DiagnosticHeaders | null;
     error?: string | null;
+    detail?: string | null;
+    processSnapshot?: string | null;
+    logTail?: string | null;
   }>) | null,
   preferLocalTelegramForward = false,
   extraForwardHeaders: Record<string, string> | null = null,
@@ -2072,6 +2112,10 @@ async function forwardToNativeHandlerWithRetry(
         headers: result.headers,
         transport,
         classification,
+        error: "error" in result ? optionalDiagnosticString(result.error) : null,
+        detail: "detail" in result ? optionalDiagnosticString(result.detail) : null,
+        processSnapshot: "processSnapshot" in result ? optionalDiagnosticString(result.processSnapshot) : null,
+        logTail: "logTail" in result ? optionalDiagnosticString(result.logTail) : null,
       });
       logInfo("channels.forward_attempt", {
         channel,
@@ -2080,6 +2124,11 @@ async function forwardToNativeHandlerWithRetry(
         status: result.status,
         classification,
         elapsedMs: Date.now() - attemptStartedAt,
+        bodyLength: result.bodyLength,
+        error: "error" in result ? optionalDiagnosticString(result.error) : null,
+        detail: "detail" in result ? optionalDiagnosticString(result.detail) : null,
+        processSnapshot: "processSnapshot" in result ? optionalDiagnosticString(result.processSnapshot) : null,
+        logTail: "logTail" in result ? optionalDiagnosticString(result.logTail) : null,
         deliveryId,
       });
       if (result.status >= 502 || isHandlerNotReady || swallowed) {
@@ -2096,6 +2145,10 @@ async function forwardToNativeHandlerWithRetry(
           bodyHead: result.bodyHead,
           transport,
           responseHeaders: result.headers,
+          error: "error" in result ? optionalDiagnosticString(result.error) : null,
+          detail: "detail" in result ? optionalDiagnosticString(result.detail) : null,
+          processSnapshot: "processSnapshot" in result ? optionalDiagnosticString(result.processSnapshot) : null,
+          logTail: "logTail" in result ? optionalDiagnosticString(result.logTail) : null,
           retryElapsedMs: Date.now() - startedAt,
           deliveryId,
         });

@@ -88,4 +88,47 @@ describe("buildWhyNotReady", () => {
     assert.ok(blocker, "expected sandbox_not_listening blocker");
     assert.equal(blocker.evidence.sandboxUrl, "https://sb-stale.vercel.run");
   });
+
+  test("telegram expected listener without ready proof yields handler blocker", async () => {
+    const meta = metaFixture();
+    meta.status = "running";
+    meta.sandboxId = "sbx-telegram";
+    meta.channels.telegram = {
+      botToken: "tg-token",
+      webhookSecret: "tg-secret",
+      webhookUrl: "https://app.example.com/api/channels/telegram/webhook",
+      botUsername: "test_bot",
+      configuredAt: Date.now(),
+    };
+    meta.lastRestoreMetrics = {
+      sandboxCreateMs: 0,
+      tokenWriteMs: 0,
+      assetSyncMs: 0,
+      startupScriptMs: 0,
+      forcePairMs: 0,
+      firewallSyncMs: 0,
+      localReadyMs: 0,
+      publicReadyMs: 0,
+      totalMs: 0,
+      skippedStaticAssetSync: true,
+      assetSha256: null,
+      vcpus: 0,
+      recordedAt: Date.now() - 1_000,
+      telegramExpected: true,
+      telegramConfigPresent: true,
+      telegramListenerReady: false,
+      telegramListenerStatus: 0,
+      telegramListenerError: "connection refused",
+    };
+
+    const report = await buildWhyNotReady(meta);
+
+    assert.equal(report.channels.telegram.ready, false);
+    const blocker = report.channels.telegram.blockers.find(
+      (b) => b.kind === "handler_not_ready",
+    );
+    assert.ok(blocker, "expected handler_not_ready blocker");
+    assert.equal(blocker.evidence.sandboxPort, 8787);
+    assert.equal(blocker.evidence.telegramListenerReady, false);
+  });
 });

@@ -164,6 +164,28 @@ const STALE_OPERATION_MS = 5 * 60 * 1000;
 const READY_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
 const READY_WAIT_POLL_MS = 1_000;
 
+function buildConfigSyncRestoreMetricsPatch(): RestorePhaseMetrics {
+  const now = Date.now();
+  return {
+    sandboxCreateMs: 0,
+    tokenWriteMs: 0,
+    assetSyncMs: 0,
+    startupScriptMs: 0,
+    forcePairMs: 0,
+    firewallSyncMs: 0,
+    localReadyMs: 0,
+    publicReadyMs: 0,
+    totalMs: 0,
+    skippedStaticAssetSync: true,
+    skippedDynamicConfigSync: false,
+    dynamicConfigHash: null,
+    dynamicConfigReason: "hash-miss",
+    assetSha256: null,
+    vcpus: 0,
+    recordedAt: now,
+  };
+}
+
 /** Default TTL safety window — refresh when remaining TTL <= 10 minutes. */
 const DEFAULT_MIN_REMAINING_MS = 10 * 60 * 1000;
 /** Circuit breaker: open after this many consecutive failures. */
@@ -312,54 +334,92 @@ async function waitForGatewayRootReady(sandbox: SandboxHandle): Promise<void> {
 async function waitForConfiguredChannelRoutesReady(params: {
   sandbox: SandboxHandle;
   slackConfigured: boolean;
+  telegramConfigured: boolean;
 }): Promise<void> {
-  if (!params.slackConfigured) {
+  if (!params.slackConfigured && !params.telegramConfigured) {
     return;
   }
 
-  const channel = "slack";
-  let lastStatus = "000";
-  let lastAttempt = 0;
   const totalTimeoutMs = 30_000;
+  const probes: Array<{
+    channel: "slack" | "telegram";
+    command: string;
+    readyStatuses: readonly string[];
+  }> = [];
 
-  await pollUntil({
-    label: "config-sync-slack-route-ready",
-    timeoutMs: totalTimeoutMs,
-    initialDelayMs: 250,
-    maxDelayMs: 1_000,
-    step: async ({ attempt, elapsedMs }) => {
-      const result = await params.sandbox.runCommand("bash", [
-        "-c",
-        `curl -s -o /dev/null -w '%{http_code}' --max-time 2 -X POST http://localhost:${OPENCLAW_PORT}/slack/events 2>/dev/null || echo 000`,
-      ]);
-      const status = (await result.output("stdout")).trim().slice(-3);
-      lastStatus = status;
-      lastAttempt = attempt;
-      logInfo("gateway.route_probe", {
-        channel,
-        status,
-        attempt,
-        elapsedMs,
-      });
-      if (status === "400" || status === "401" || status === "403") {
-        return { done: true, result: true };
-      }
-      return { done: false };
-    },
-    timeoutError: ({ attempt, elapsedMs }) => {
-      const attempts = attempt > 0 ? attempt : lastAttempt;
-      const totalMs = elapsedMs > 0 ? elapsedMs : totalTimeoutMs;
-      logWarn("gateway.route_ready_timeout", {
-        channel,
-        lastStatus,
-        attempts,
-        totalMs,
-      });
-      return new Error(
-        `${channel} route never returned 2xx after ${attempts} attempts (${totalMs}ms; last status: ${lastStatus})`,
-      );
-    },
-  });
+  if (params.slackConfigured) {
+    probes.push({
+      channel: "slack",
+      command: `curl -s -o /dev/null -w '%{http_code}' --max-time 2 -X POST http://localhost:${OPENCLAW_PORT}/slack/events 2>/dev/null || echo 000`,
+      readyStatuses: ["400", "401", "403"],
+    });
+  }
+
+  if (params.telegramConfigured) {
+    probes.push({
+      channel: "telegram",
+      command: `curl -s -o /dev/null -w '%{http_code}' --max-time 2 -X POST -H 'Content-Type: application/json' -H 'x-telegram-bot-api-secret-token: probe-invalid-secret' -d '{"probe":true}' http://127.0.0.1:${OPENCLAW_TELEGRAM_WEBHOOK_PORT}/telegram-webhook 2>/tmp/openclaw-config-sync-tg-probe.err || echo 000`,
+      readyStatuses: ["401"],
+    });
+  }
+
+  for (const probe of probes) {
+    let lastStatus = "000";
+    let lastAttempt = 0;
+    let lastError = "";
+
+    await pollUntil({
+      label: `config-sync-${probe.channel}-route-ready`,
+      timeoutMs: totalTimeoutMs,
+      initialDelayMs: 250,
+      maxDelayMs: 1_000,
+      step: async ({ attempt, elapsedMs }) => {
+        const result = await params.sandbox.runCommand("bash", [
+          "-c",
+          probe.command,
+        ]);
+        const stdout = (await result.output("stdout")).trim();
+        const stderr = await result.output("stderr").catch(() => "");
+        const status = stdout.slice(-3);
+        lastStatus = status;
+        lastAttempt = attempt;
+        lastError = stderr.trim().slice(-200);
+        logInfo("gateway.route_probe", {
+          channel: probe.channel,
+          status,
+          attempt,
+          elapsedMs,
+          exitCode: result.exitCode,
+          stderrHead: lastError || null,
+        });
+        if (probe.readyStatuses.includes(status)) {
+          logInfo("gateway.route_ready", {
+            channel: probe.channel,
+            status,
+            attempts: attempt,
+            elapsedMs,
+          });
+          return { done: true, result: true };
+        }
+        return { done: false };
+      },
+      timeoutError: ({ attempt, elapsedMs }) => {
+        const attempts = attempt > 0 ? attempt : lastAttempt;
+        const totalMs = elapsedMs > 0 ? elapsedMs : totalTimeoutMs;
+        logWarn("gateway.route_ready_timeout", {
+          channel: probe.channel,
+          lastStatus,
+          attempts,
+          totalMs,
+          lastError: lastError || null,
+          readyStatuses: probe.readyStatuses,
+        });
+        return new Error(
+          `${probe.channel} route never returned ready status after ${attempts} attempts (${totalMs}ms; last status: ${lastStatus})`,
+        );
+      },
+    });
+  }
 }
 
 export type BackgroundScheduler = (callback: () => Promise<void> | void) => void;
@@ -1197,6 +1257,22 @@ export async function syncGatewayConfigToSandbox(): Promise<LiveConfigSyncResult
     await waitForConfiguredChannelRoutesReady({
       sandbox,
       slackConfigured: Boolean(slackConfig),
+      telegramConfigured: Boolean(meta.channels.telegram),
+    });
+
+    await mutateMeta((next) => {
+      if (next.sandboxId !== sandboxId) return;
+      if (next.channels.telegram) {
+        next.lastRestoreMetrics = {
+          ...(next.lastRestoreMetrics ?? buildConfigSyncRestoreMetricsPatch()),
+          recordedAt: Date.now(),
+          telegramExpected: true,
+          telegramConfigPresent: true,
+          telegramListenerReady: true,
+          telegramListenerStatus: 401,
+          telegramListenerError: null,
+        };
+      }
     });
 
     logInfo("sandbox.config_sync_restarted", { sandboxId });

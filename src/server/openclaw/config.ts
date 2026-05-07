@@ -1345,7 +1345,7 @@ Up to 10 reference images supported for Gemini models.
 
 ## Output
 
-The script saves PNG images to disk and prints \`MEDIA:\` lines with absolute paths (one per line).
+The script saves PNG images to disk and prints \`MEDIA:\` lines with workspace-relative paths (one per line).
 OpenClaw renders these inline and delivers to all channels (Telegram, Slack, WhatsApp, Discord) automatically.
 
 **NEVER call \`message send\` or \`message send --media\` after running gen.mjs.** The \`MEDIA:\` lines already handle ALL delivery — inline rendering AND channel delivery. Calling \`message send\` separately causes every image to appear twice in the channel. This applies to every channel and every model. There are zero exceptions. Your task is complete once gen.mjs finishes.
@@ -1478,7 +1478,14 @@ if (isGemini) {
 }
 
 if (saved.length === 0) { console.error("No images were saved"); process.exit(1); }
-for (const f of saved) console.log("MEDIA:" + path.resolve(f));
+function toMediaReference(filePath) {
+  const resolved = path.resolve(filePath);
+  const relative = path.relative(process.cwd(), resolved);
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative)
+    ? relative
+    : resolved;
+}
+for (const f of saved) console.log("MEDIA:" + toMediaReference(f));
 console.error("\\n[gen.mjs] Images delivered via MEDIA: lines. Do NOT call 'message send --media' — that would send duplicates.");
 `;
 }
