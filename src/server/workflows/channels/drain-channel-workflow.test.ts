@@ -202,14 +202,16 @@ test("processChannelStep skips ensureSandboxReady when boot returns running", as
   assert.equal(forwardedSandboxId, "sbx-booted");
 });
 
-test("processChannelStep clears Telegram boot message after accepted forward", async () => {
+test("processChannelStep retains Telegram boot message after accepted forward", async () => {
   let updateCalls = 0;
   let clearCalls = 0;
+  let lastUpdateText: string | null = null;
 
   const dependencies = createWorkflowDependencies({
     buildExistingBootHandle: async () => ({
-      async update() {
+      async update(text: string) {
         updateCalls += 1;
+        lastUpdateText = text;
       },
       async clear() {
         clearCalls += 1;
@@ -233,14 +235,30 @@ test("processChannelStep clears Telegram boot message after accepted forward", a
     dependencies,
   });
 
-  assert.equal(updateCalls, 0, "accepted Telegram forward should not leave an Almost Ready edit");
-  assert.equal(clearCalls, 1, "accepted Telegram forward should delete the boot placeholder");
+  assert.equal(updateCalls, 1, "accepted Telegram forward should update the boot placeholder");
+  assert.equal(clearCalls, 0, "accepted Telegram forward should not delete the boot placeholder");
+  assert.match(lastUpdateText ?? "", /OpenClaw received your message/);
+  assert.match(lastUpdateText ?? "", /Working on the reply/);
 
   const logs = getServerLogs();
-  assert.ok(
-    logs.some((entry) => entry.message === "channels.telegram_boot_message_cleared_after_accept"),
-    "cleanup success should be logged",
+  const retainedLog = logs.find(
+    (entry) => entry.message === "channels.telegram_boot_message_retained_after_accept",
   );
+  assert.ok(retainedLog, "placeholder retention should be logged");
+  assert.ok(
+    !logs.some((entry) => entry.message === "channels.telegram_boot_message_cleared_after_accept"),
+    "accepted Telegram forward should not log placeholder cleanup",
+  );
+  assert.equal(retainedLog?.data?.deliveryId, "telegram:1");
+  assert.equal(retainedLog?.data?.requestId, "req-clear");
+  assert.equal(retainedLog?.data?.bootMessageId, 17);
+  assert.equal(retainedLog?.data?.forwardStatus, 200);
+  assert.equal(retainedLog?.data?.forwardAttempts, 1);
+  assert.equal(retainedLog?.data?.forwardTransport, "local");
+  assert.equal(retainedLog?.data?.clearOnAccept, false);
+  assert.equal(retainedLog?.data?.downstreamReplyReceiptObserved, false);
+  assert.equal(retainedLog?.data?.downstreamReplyReceiptImplemented, false);
+  assert.equal(typeof retainedLog?.data?.staleAfterMs, "number");
 });
 
 test("processChannelStep falls back to ensureSandboxReady when boot returns non-running", async () => {

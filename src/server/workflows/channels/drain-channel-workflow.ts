@@ -28,6 +28,9 @@ import {
 // enough to cover a reasonable long-turn window so the bot-reply
 // cleanup path still finds them. Short TTL (10 min) left orphans.
 const PENDING_BOOT_MESSAGE_TTL_SECONDS = 60 * 60;
+const TELEGRAM_ACCEPTED_PLACEHOLDER_STALE_AFTER_MS = 5 * 60 * 1000;
+const TELEGRAM_ACCEPTED_PLACEHOLDER_TEXT =
+  "🦞 OpenClaw received your message. Working on the reply…\n\nIf this stays here for more than a few minutes, try again.";
 
 // Discord deferred-interaction tokens are valid for 15 minutes. Soft-
 // deadline a little under that so a reply attempt at 13.5min still
@@ -1251,8 +1254,8 @@ export async function processChannelStep(
     // Boot-message cleanup. Slack keeps a "dead-time" status message visible
     // while OpenClaw/Claude generates the real reply (~5s), then the Slack
     // webhook deletes it when OpenClaw's reply event arrives. Telegram has no
-    // bot-message webhook signal, so the workflow must clear the placeholder
-    // as soon as the native handler accepts the update.
+    // bot-message webhook signal yet, so native accept must not be treated as
+    // proof of user-visible reply delivery.
     if (existingBootHandle) {
       if (channel === "slack" && forwardResult.ok) {
         await existingBootHandle
@@ -1296,23 +1299,38 @@ export async function processChannelStep(
           }
         }
       } else if (channel === "telegram" && forwardResult.ok) {
+        diag.bootMessageAction = "telegram-retained-after-native-accept";
+        diag.bootMessageRetainedAt = Date.now();
+        diag.bootMessageStaleAfterMs = TELEGRAM_ACCEPTED_PLACEHOLDER_STALE_AFTER_MS;
+        diag.downstreamReplyReceiptObserved = false;
+        diag.downstreamReplyReceiptImplemented = false;
         await existingBootHandle
-          .clear()
+          .update(TELEGRAM_ACCEPTED_PLACEHOLDER_TEXT)
           .then(() => {
-            logInfo("channels.telegram_boot_message_cleared_after_accept", {
+            logInfo("channels.telegram_boot_message_retained_after_accept", {
               channel,
               requestId,
               deliveryId,
+              bootMessageId: bootMessageId ?? null,
               forwardStatus: forwardResult.status,
               forwardAttempts: retryingResult?.attempts ?? null,
               forwardTransport: retryingResult?.transport ?? null,
+              forwardTotalMs: retryingResult?.totalMs ?? null,
+              placeholderAction: "updated-and-retained",
+              placeholderTextKey: "telegram_native_accept_waiting_for_reply",
+              clearOnAccept: false,
+              downstreamReplyReceiptObserved: false,
+              downstreamReplyReceiptImplemented: false,
+              reason: "native_http_accept_is_not_telegram_reply_receipt",
+              staleAfterMs: TELEGRAM_ACCEPTED_PLACEHOLDER_STALE_AFTER_MS,
             });
           })
           .catch((bootError) => {
-            logWarn("channels.telegram_boot_message_cleanup_failed", {
+            logWarn("channels.telegram_boot_message_retention_update_failed", {
               channel,
               requestId,
               deliveryId,
+              bootMessageId: bootMessageId ?? null,
               phase: "accepted-forward",
               forwardStatus: forwardResult.status,
               error:
