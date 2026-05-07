@@ -218,6 +218,7 @@ export async function POST(request: Request): Promise<Response> {
     // silent drop is worse than the (low) risk of duplicate delivery through
     // the workflow path.
     let effectiveMeta = meta;
+    let fastPathFellBackToWorkflow = false;
     // The fast path should use the live 8787 surface whenever the wrapper
     // believes the sandbox is running. Restore metrics can be absent on fresh
     // creates or stale after recovery, so they are logged as evidence but do
@@ -316,6 +317,7 @@ export async function POST(request: Request): Promise<Response> {
                 forwardResponse.status === 504
               ? "gateway_error"
               : "non_ok";
+        fastPathFellBackToWorkflow = true;
         // Classify the failure using the same rules as Slack so the
         // forward outcome record is consistent across channels.
         const isSandboxNotListening =
@@ -403,6 +405,7 @@ export async function POST(request: Request): Promise<Response> {
           error instanceof Error && error.name === "TimeoutError";
         const errorMessage =
           error instanceof Error ? error.message : String(error);
+        fastPathFellBackToWorkflow = true;
         logWarn("channels.telegram_fast_path_failed", withOperationContext(op, {
           error: errorMessage,
           errorName: error instanceof Error ? error.name : undefined,
@@ -455,7 +458,9 @@ export async function POST(request: Request): Promise<Response> {
     // so the user gets immediate feedback. The message ID is passed to the
     // workflow so the step can edit/delete it during processing.
     let bootMessageId: number | null = null;
-    if (effectiveMeta.status !== "running" && chatId) {
+    const shouldSendBootMessage =
+      effectiveMeta.status !== "running" || fastPathFellBackToWorkflow;
+    if (shouldSendBootMessage && chatId) {
       try {
         const result = await sendMessage(
           config.botToken,
@@ -467,6 +472,8 @@ export async function POST(request: Request): Promise<Response> {
         logInfo("channels.telegram_boot_message_sent", withOperationContext(op, {
           chatId,
           bootMessageId,
+          effectiveStatus: effectiveMeta.status,
+          fastPathFellBackToWorkflow,
           receivedToBootMessageMs: Date.now() - receivedAtMs,
         }));
         await persistWebhookDiagnostic({
@@ -479,12 +486,15 @@ export async function POST(request: Request): Promise<Response> {
           receivedAtMs,
           bootMessageId,
           effectiveStatus: effectiveMeta.status,
+          fastPathFellBackToWorkflow,
           sandboxId: effectiveMeta.sandboxId ?? null,
           outcome: "accepted",
         });
       } catch (err) {
         logWarn("channels.telegram_boot_message_failed", withOperationContext(op, {
           chatId,
+          effectiveStatus: effectiveMeta.status,
+          fastPathFellBackToWorkflow,
           error: err instanceof Error ? err.message : String(err),
           receivedToBootMessageAttemptMs: Date.now() - receivedAtMs,
         }));
@@ -497,6 +507,7 @@ export async function POST(request: Request): Promise<Response> {
           chatId,
           receivedAtMs,
           effectiveStatus: effectiveMeta.status,
+          fastPathFellBackToWorkflow,
           sandboxId: effectiveMeta.sandboxId ?? null,
           error: err instanceof Error ? err.message : String(err),
           outcome: "accepted",

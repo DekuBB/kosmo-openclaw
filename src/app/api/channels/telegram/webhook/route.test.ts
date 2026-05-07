@@ -496,9 +496,19 @@ test("Telegram webhook: fast path non-ok response falls through to workflow wake
         { status: 502, headers: { "content-type": "application/json" } },
       ),
     );
+    const bootMessageId = 88;
+    const sendMessageCalls: string[] = [];
+    h.fakeFetch.onPost(/api\.telegram\.org.*\/sendMessage$/, (url) => {
+      sendMessageCalls.push(url);
+      return Response.json({ ok: true, result: { message_id: bootMessageId } });
+    });
 
     const route = getTelegramWebhookRoute();
-    const startMock = mock.method(telegramWebhookWorkflowRuntime, "start", async () => {});
+    let workflowBootMessageId: number | string | null | undefined;
+    const startMock = mock.method(telegramWebhookWorkflowRuntime, "start", async (_workflow: unknown, args: unknown[]) => {
+      const envelope = Array.isArray(args) ? args[0] as { bootMessageId?: number | string | null } : null;
+      workflowBootMessageId = envelope?.bootMessageId;
+    });
 
     try {
       const req = buildTelegramWebhook({ webhookSecret: TELEGRAM_WEBHOOK_SECRET });
@@ -510,7 +520,15 @@ test("Telegram webhook: fast path non-ok response falls through to workflow wake
         1,
         "workflow MUST start when native handler returned non-2xx so the update is not silently dropped",
       );
+      assert.equal(sendMessageCalls.length, 1, "fast-path fallback should send a Telegram waiting message");
+      assert.equal(workflowBootMessageId, bootMessageId, "workflow should receive the waiting message id");
       const logs = getServerLogs();
+      const bootMessageLog = logs.find(
+        (entry) => entry.message === "channels.telegram_boot_message_sent",
+      );
+      assert.ok(bootMessageLog, "boot message send should be logged on fast-path fallback");
+      assert.equal(bootMessageLog.data?.effectiveStatus, "running");
+      assert.equal(bootMessageLog.data?.fastPathFellBackToWorkflow, true);
       const gatewayErrorLog = logs.find(
         (entry) => entry.message === "channels.telegram_fast_path_gateway_error",
       );
