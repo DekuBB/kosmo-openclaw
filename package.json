@@ -12,6 +12,7 @@
     "test": "node scripts/test.mjs",
     "test:watch": "node scripts/test.mjs --watch",
     "smoke:remote": "tsx src/server/smoke/remote-smoke.ts",
+    "slack:debug-send": "node scripts/slack-debug-send.mjs",
     "test:telegram-wake": "node scripts/test-telegram-wake.mjs",
     "test:telegram-wake-local": "node scripts/test-telegram-wake-local.mjs",
     "verify": "node scripts/verify.mjs",

@@ -60,6 +60,14 @@ Channel save and channel readiness are separate. A channel can be connectable be
 
 ## Slack
 
+### Sending real debug messages
+
+For live Slack delivery incidents, use the operator-only Slack debug sender when a repeatable real user message is needed. See [Slack Debug Sender](slack-debug-sender.md).
+
+The sender uses a Slack OAuth user token with `chat:write` and posts through `chat.postMessage`, which triggers Slack's normal Events API path into `/api/channels/slack/webhook`. Do not use bot tokens, incoming webhooks, copied browser cookies, or fake Events API payloads as the primary end-to-end test; those do not prove the same user-message path.
+
+The sender writes sanitized correlation output under `.agent-runs/channel-debug/<timestamp>/slack/channel/`. Use its `debugId` and Slack `channel:ts` to find `channels.slack_webhook_accepted`, then follow the resulting Slack event ID through `lastForward`, Vercel logs, Workflow state, and sandbox evidence.
+
 ### Connecting Slack
 
 There are two ways to connect Slack:

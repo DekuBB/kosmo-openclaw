@@ -1,0 +1,25 @@
+{
+  "display_information": {
+    "name": "OpenClaw Debug Sender",
+    "description": "Internal user-token app for sending real Slack debug messages into OpenClaw channel incidents.",
+    "background_color": "#111111"
+  },
+  "oauth_config": {
+    "scopes": {
+      "user": [
+        "chat:write",
+        "channels:read",
+        "groups:read",
+        "im:read",
+        "mpim:read",
+        "im:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": true,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}
