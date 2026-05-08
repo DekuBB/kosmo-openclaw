@@ -1020,6 +1020,35 @@ async function triggerRestore(
   }
 }
 
+test("persistent resume requests explicit SDK resume", async () => {
+  const fake = new FakeSandboxController();
+  const originalFetch = globalThis.fetch;
+
+  await withTestEnv(fake, async () => {
+    await mutateMeta((meta) => {
+      meta.status = "stopped";
+      meta.snapshotId = "snap-explicit-resume";
+      meta.gatewayToken = "test-gw-token";
+    });
+
+    globalThis.fetch = async () =>
+      new Response('<div id="openclaw-app"></div>', { status: 200 });
+
+    try {
+      await triggerRestore(fake, {
+        tokenOverride: "test-ai-key",
+      });
+
+      assert.deepEqual(fake.getCalls[0], {
+        sandboxId: LIFECYCLE_SANDBOX_NAME,
+        resume: true,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 test("restoreSandboxFromSnapshot writes all files + manifest on first restore (no existing manifest)", async () => {
   const fake = new FakeSandboxController();
   const originalFetch = globalThis.fetch;
@@ -5175,6 +5204,61 @@ test("[lifecycle] ensureSandboxRunning resume unhealthy handle -> clears snapsho
         unhealthy.deleteCalled,
         "Unhealthy handle should have been deleted before create fallback",
       );
+    } finally {
+      _setAiGatewayTokenOverrideForTesting(null);
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("[lifecycle] ensureSandboxRunning resume stopped handle after explicit resume -> falls back to create", async () => {
+  const fake = new FakeSandboxController();
+  const originalFetch = globalThis.fetch;
+
+  await withTestEnv(fake, async () => {
+    const sandboxName = `oc-${"openclaw-single".replace(/[^a-z0-9-]/gi, "-").toLowerCase()}`;
+    const stopped = new FakeSandboxHandle(sandboxName, fake.events, 60_000);
+    stopped.setStatus("stopped");
+    fake.handlesByIds.set(sandboxName, stopped);
+
+    await mutateMeta((meta) => {
+      meta.status = "stopped";
+      meta.snapshotId = "snap-resume-stopped";
+      meta.snapshotConfigHash = "hash-existing";
+      meta.snapshotDynamicConfigHash = "dynhash-existing";
+      meta.snapshotAssetSha256 = "assetsha-existing";
+      meta.restorePreparedStatus = "ready";
+      meta.restorePreparedReason = null;
+      meta.restorePreparedAt = Date.now();
+    });
+
+    globalThis.fetch = async () =>
+      new Response('<div id="openclaw-app"></div>', { status: 200 });
+
+    _setAiGatewayTokenOverrideForTesting("test-key");
+    try {
+      let scheduledCallback: (() => Promise<void> | void) | null = null;
+      await ensureSandboxRunning({
+        origin: "https://test.example.com",
+        reason: "resume-stopped-fallback",
+        schedule(cb) {
+          scheduledCallback = cb;
+        },
+      });
+
+      assert.ok(scheduledCallback);
+      await (scheduledCallback as () => Promise<void>)();
+
+      const meta = await getInitializedMeta();
+      assert.equal(meta.status, "running", "Should reach running after fallback");
+      assert.equal(meta.snapshotId, null, "snapshotId should be cleared on fallback");
+      assert.equal(meta.restorePreparedStatus, "dirty");
+      assert.equal(meta.restorePreparedReason, "snapshot-missing");
+      assert.ok(stopped.deleteCalled, "Stopped handle should be deleted before create fallback");
+      assert.deepEqual(fake.getCalls[0], {
+        sandboxId: sandboxName,
+        resume: true,
+      });
     } finally {
       _setAiGatewayTokenOverrideForTesting(null);
       globalThis.fetch = originalFetch;

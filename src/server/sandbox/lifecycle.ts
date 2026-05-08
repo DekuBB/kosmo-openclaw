@@ -3049,25 +3049,26 @@ async function createAndBootstrapSandboxWithinLifecycleLock(
       }
     }
 
-    // Normal path: get() retrieves the persistent sandbox handle (which may
-    // be stopped).  The first runCommand() triggers an implicit platform
-    // resume.  Fall back to create() only if the sandbox doesn't exist yet.
+    // Normal path: get() retrieves and resumes the persistent sandbox handle.
+    // Fall back to create() only if the sandbox doesn't exist yet, or if the
+    // platform returns a handle that cannot be used for immediate commands.
     if (!sandbox) {
+    const unhealthyResumeStatuses = new Set<string>(["failed", "error", "aborted", "stopped"]);
     try {
       progress.appendLine("system", `Resuming persistent sandbox: ${sandboxName}`);
-      const resumedHandle = await getSandboxController().get({ sandboxId: sandboxName });
+      const resumedHandle = await getSandboxController().get({ sandboxId: sandboxName, resume: true });
       // Reject unhealthy statuses that @vercel/sandbox will happily return
       // from get(). The SDK wraps any existing sandbox — including ones that
-      // failed to boot or were aborted — and returning that handle to the
-      // resume flow causes every subsequent runCommand to hang or error out,
-      // which the caller sees as a 120s "sandbox did not become ready"
-      // timeout. Treat these as "no existing sandbox" so the catch branch
-      // creates a fresh one. Best-effort delete first to release the
+      // failed to boot, were aborted, or remain stopped after an explicit
+      // resume request — and returning that handle to the resume flow causes
+      // every subsequent runCommand to hang or error out, which the caller
+      // sees as a 120s "sandbox did not become ready" timeout. Treat these as
+      // "no existing sandbox" so the catch branch creates a fresh one.
+      // Best-effort delete first to release the
       // persistent name; ignore failures (the name is already bound to a
       // dead handle and create-by-name will 409 and get()-fallback if the
       // delete didn't take).
-      const unhealthyStatuses = new Set<string>(["failed", "error", "aborted"]);
-      if (unhealthyStatuses.has(resumedHandle.status)) {
+      if (unhealthyResumeStatuses.has(resumedHandle.status)) {
         logWarn("sandbox.create.resume_unhealthy_handle", ctx({
           sandboxId: resumedHandle.sandboxId,
           sandboxStatus: resumedHandle.status,
@@ -3137,7 +3138,12 @@ async function createAndBootstrapSandboxWithinLifecycleLock(
             `Create 409 — recovering via get(${sandboxName})`,
           );
           try {
-            sandbox = await getSandboxController().get({ sandboxId: sandboxName });
+            sandbox = await getSandboxController().get({ sandboxId: sandboxName, resume: true });
+            if (unhealthyResumeStatuses.has(sandbox.status)) {
+              throw new Error(
+                `name_conflict_resume_unhealthy_handle:${sandbox.status}:${sandbox.sandboxId}`,
+              );
+            }
             progress.appendLine(
               "system",
               `Recovered: ${sandbox.sandboxId} status=${sandbox.status}`,
