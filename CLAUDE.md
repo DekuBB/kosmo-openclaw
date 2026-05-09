@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `vercel-openclaw` is a single-instance Next.js 16 app that manages exactly one persistent Vercel Sandbox running OpenClaw: auth, on-demand create/resume, proxy at `/gateway`, HTML injection for WebSocket rewrite and gateway-token handoff, firewall learning, and channel webhooks (Slack, Telegram, Discord, WhatsApp).
 
-For operator docs, see `README.md`, `CONTRIBUTING.md`, and `docs/` (`architecture.md`, `channels-and-webhooks.md`, `lifecycle-and-restore.md`, `preflight-and-launch-verification.md`, `deployment-protection.md`, `environment-variables.md`, `api-reference.md`).
+For operator docs, start with `docs/getting-started/README.md`. It is the main handoff for the three-repo system (`vclaw`, `vercel-openclaw`, and the OpenClaw fork), `vclaw create`, operational paths, release, and reliability contracts. Then use `README.md`, `CONTRIBUTING.md`, and the deep docs under `docs/` (`architecture.md`, `channels-and-webhooks.md`, `lifecycle-and-restore.md`, `preflight-and-launch-verification.md`, `deployment-protection.md`, `environment-variables.md`, `api-reference.md`).
 
 ## Commands
 
@@ -20,6 +20,19 @@ pnpm smoke:remote --base-url https://my-app.vercel.app [--destructive] [--auth-c
 ```
 
 Use `node scripts/verify.mjs` for all automation and CI — never bare `npm`/`tsx`. For docs-only changes that touch operator env names or instructions, also run `pnpm check:verify-contract`.
+
+## Main guide / getting started
+
+Read `docs/getting-started/README.md` before changing setup, provisioning, release, bundle compatibility, or cross-repo behavior. The guide was integrated from `~/dev/vclaw-handoff` and is now the canonical in-repo onboarding path.
+
+Guide pages:
+
+- `docs/getting-started/system-map.md` — three-repo architecture and ownership boundaries.
+- `docs/getting-started/operational-paths.md` — create/deploy, sandbox boot/proxy, channel delivery, and verification boundaries.
+- `docs/getting-started/vclaw-create.md` — supported install flow, flags, non-interactive runs, and failure boundaries.
+- `docs/getting-started/release-and-reliability.md` — OpenClaw bundle assets, dashboard verification, CLI publish, and risk areas.
+
+Keep `README.md`, `docs/README.md`, and this file in sync when the guide moves or its scope changes. `AGENTS.md` is a symlink to this file, so updates here are also the agent-facing instructions.
 
 ## Local dev against prod env
 
@@ -328,6 +341,7 @@ Full list is in `.env.example`. Non-obvious policies:
 - **Store requirement**: missing Redis is a hard fail on Vercel but a warning in local/non-Vercel. Applies to both preflight and channel connectability.
 - **`CRON_SECRET`**: when unset on Vercel, the runtime falls back to `ADMIN_SECRET` — that's a warning, not a failure. Missing both is a hard fail.
 - **`OPENCLAW_PACKAGE_SPEC`**: when unset on Vercel, the runtime falls back to a pinned known-good version (currently `openclaw@2026.4.12`). The deployment contract **warns** — it does not fail.
+- **`OPENCLAW_BUNDLE_URL` / `OPENCLAW_BUNDLE_UI_URL`**: set by `vclaw` when it pins a published OpenClaw bundle. Keep these aligned with `OPENCLAW_PACKAGE_SPEC`; a package spec alone does not prove the sidecar asset set is present.
 - **`NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_BASE_DOMAIN`, `BASE_DOMAIN`**: inputs to `getPublicOrigin()` alongside forwarded headers and Vercel system env vars. Admin-visible URLs must use `buildPublicDisplayUrl()`.
 - **`NEXT_PUBLIC_VERCEL_APP_CLIENT_ID` + `VERCEL_APP_CLIENT_SECRET`**: required for `sign-in-with-vercel` OAuth. Missing these is a `auth-config` fail in preflight when that mode is selected.
 - **`OPENCLAW_INSTANCE_ID`**: namespaces Redis keys. On Vercel it auto-uses `VERCEL_PROJECT_ID` when unset; locally falls back to `openclaw-single`. Changing it points at a new namespace — it does not migrate existing state.

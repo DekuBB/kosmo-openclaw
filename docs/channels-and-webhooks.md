@@ -94,7 +94,7 @@ When a Slack message arrives at the webhook:
 
 1. The route validates the Slack signature.
 2. If the sandbox is running, the message is forwarded directly to the OpenClaw gateway's `/slack/events` endpoint on port 3000 inside the sandbox (the fast path).
-3. If the sandbox is stopped, the route starts a durable Workflow that resumes the sandbox, sends the message to the gateway via `POST /v1/chat/completions`, and delivers the reply back to Slack.
+3. If the sandbox is stopped, the route may send a boot message, then starts a durable Workflow that resumes the sandbox and forwards the original payload to the OpenClaw gateway's `/slack/events` handler.
 4. Slack uses threaded replies for responses.
 
 ## Telegram
@@ -113,7 +113,7 @@ When a Telegram update arrives at the webhook:
 
 1. The route validates the webhook secret header.
 2. If the sandbox is running, the raw update is forwarded to OpenClaw's native Telegram handler on port 8787 inside the sandbox (the fast path). This preserves full native Telegram features — slash commands, media, inline keyboards, etc.
-3. If the sandbox is stopped, the route sends a boot message ("🦞 Waking up…") to the user, then starts a durable Workflow that resumes the sandbox, sends the message via chat completions, delivers the reply, and deletes the boot message.
+3. If the sandbox is stopped, the route sends a boot message to the user, then starts a durable Workflow that resumes the sandbox, forwards the raw update to the native Telegram handler, and lets that handler own the reply behavior.
 
 ## Protected deployments
 
@@ -132,13 +132,19 @@ No Workflow is started. No boot message is sent. The response comes back as quic
 
 ## What happens when the sandbox is stopped
 
-When the sandbox is stopped and a channel message arrives, both platforms use a durable delivery path powered by Vercel Workflow:
+When the sandbox is stopped and a channel message arrives, the webhook route starts a shared durable delivery path powered by Vercel Workflow:
 
-1. **Telegram and WhatsApp:** a boot message ("🦞 Waking up… one moment.") is sent to the user so they know the sandbox is waking.
-2. The Workflow step resumes the sandbox if needed.
-3. The message is sent to the gateway via `POST /v1/chat/completions`.
-4. The reply is delivered back to the originating channel.
-5. **Telegram and WhatsApp:** the boot message is deleted after the reply is delivered.
+1. Slack, Telegram, and WhatsApp may send a short boot message so the user gets immediate feedback.
+2. The Workflow resumes or creates the sandbox and waits for the relevant handler to become reachable.
+3. The original webhook payload is forwarded to OpenClaw's native channel handler:
+   - Slack: `/slack/events` on port 3000.
+   - Telegram: `/telegram-webhook` on port 8787.
+   - WhatsApp: `/whatsapp-webhook` on port 3000.
+   - Discord: `/discord-webhook` on port 3000.
+4. The native handler owns channel-specific processing and reply behavior.
+5. Boot messages are updated or cleared after the native handler accepts the payload.
+
+The Workflow-based path is a native-forward wake path, not a generic `POST /v1/chat/completions` fallback.
 
 The Workflow-based path is durable — it survives function restarts and retries on transient failures. On deployed Vercel environments, that durability depends on Redis-backed state and missing Redis is a hard blocker for channel setup. In local or non-Vercel environments the app can still run with the in-memory store, but queue state and wake/retry durability do not survive cold starts.
 
@@ -150,7 +156,7 @@ The admin panel shows a channel as blocked when deployment prerequisites are sti
 
 ### Preflight passes but channel still is not trusted
 
-This means config looks good, but the current deployment has not yet proven the full delivery path. Preflight only checks config. Safe mode proves boot or resume plus a real completion, but destructive launch verification is still required before `channelReadiness.ready` becomes `true`.
+This means config looks good, but the current deployment has not yet proven the runtime prerequisites for channel delivery. Preflight only checks config. Safe mode proves boot or resume plus a real completion, but destructive launch verification is still required before `channelReadiness.ready` becomes `true`. After connecting a channel, still send a real platform test message to prove external delivery.
 
 ### Channel webhooks fail on a protected deployment
 

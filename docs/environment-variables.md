@@ -44,6 +44,13 @@ Set `VERCEL_AUTH_MODE=sign-in-with-vercel` to use Vercel OAuth instead of `ADMIN
 | `OPENCLAW_SANDBOX_VCPUS` | vCPU count for sandbox create/resume (1, 2, 4, or 8; default: 1). Keep fixed during benchmarks. |
 | `OPENCLAW_SANDBOX_SLEEP_AFTER_MS` | How long the sandbox stays alive after last activity, in milliseconds (60000–2700000; default: 1800000 = 30 min). Heartbeat and touch-throttle intervals are derived proportionally. Existing running sandboxes cannot be shortened in place. If you increase this value, the next touch/heartbeat can top the sandbox timeout up to the new target. If you decrease it, the lower value becomes exact on the next create or restore. |
 
+## OpenClaw bundle pinning
+
+| Variable | Purpose |
+| -------- | ------- |
+| `OPENCLAW_BUNDLE_URL` | Optional URL to a published `openclaw.bundle.mjs` release asset. `vclaw create --bundle-url` sets this when pinning a bundle. A compatible release must include the required sidecar assets documented in [Release and Reliability](getting-started/release-and-reliability.md). |
+| `OPENCLAW_BUNDLE_UI_URL` | Optional URL to the matching `control-ui.tar.gz` asset. `vclaw` derives this from `OPENCLAW_BUNDLE_URL` when using the standard release asset layout. |
+
 ## Slack OAuth install (optional)
 
 When all three variables below are set, the admin panel offers a one-click "Install to Slack" OAuth flow. Create the Slack app once from the manifest flow, copy its credentials, and set them here.
