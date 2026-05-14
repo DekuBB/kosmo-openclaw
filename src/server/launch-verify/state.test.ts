@@ -12,6 +12,7 @@ import {
   buildLaunchVerifyQueueFailureMessage,
   buildLaunchVerifyQueueSuccessMessage,
 } from "@/server/launch-verify/queue-probe";
+import { getHostedFeatureSupportMatrix } from "@/shared/hosted-feature-support";
 import { isChannelReady } from "@/shared/launch-verification";
 import type {
   LaunchVerificationPayload,
@@ -60,6 +61,7 @@ function makeDestructivePayload(
     startedAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
     phases: makeAllPassPhases(),
+    featureSupport: getHostedFeatureSupportMatrix(),
     ...overrides,
   };
 }
@@ -72,6 +74,7 @@ function makeSafePayload(
     mode: "safe",
     startedAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
+    featureSupport: getHostedFeatureSupportMatrix(),
     phases: [
       { id: "preflight", status: "pass", durationMs: 10, message: "ok" },
       { id: "queuePing", status: "pass", durationMs: 10, message: "ok" },

@@ -5,10 +5,11 @@ import {
   OPENCLAW_BUNDLE_COMPATIBILITY_ERROR_CODE,
   REQUIRED_BUNDLE_METADATA_ASSETS,
   REQUIRED_DASHBOARD_BUNDLE_ASSETS,
+  REQUIRED_MANIFEST_RECORDED_ASSETS,
   validateBundleAssetManifestForDashboard,
 } from "@/server/openclaw/bundle-compatibility";
 
-function manifest(assetNames = [...REQUIRED_DASHBOARD_BUNDLE_ASSETS, ...REQUIRED_BUNDLE_METADATA_ASSETS]) {
+function manifest(assetNames = REQUIRED_MANIFEST_RECORDED_ASSETS) {
   return {
     schemaVersion: 1,
     name: "openclaw-sandbox-bundle",
@@ -20,9 +21,12 @@ function manifest(assetNames = [...REQUIRED_DASHBOARD_BUNDLE_ASSETS, ...REQUIRED
 }
 
 test("validateBundleAssetManifestForDashboard accepts the existing OpenClaw release manifest", () => {
-  const result = validateBundleAssetManifestForDashboard(manifest());
+  const releaseManifest = manifest();
+  const result = validateBundleAssetManifestForDashboard(releaseManifest);
 
   assert.equal(result.ok, true);
+  assert.equal(releaseManifest.assets["asset-manifest.json"], undefined);
+  assert.equal(releaseManifest.assets["checksums.sha256"], undefined);
 });
 
 test("validateBundleAssetManifestForDashboard rejects invalid manifest shape with shared code", () => {
@@ -34,7 +38,7 @@ test("validateBundleAssetManifestForDashboard rejects invalid manifest shape wit
 });
 
 test("validateBundleAssetManifestForDashboard rejects missing required dashboard sidecar", () => {
-  const assetNames = [...REQUIRED_DASHBOARD_BUNDLE_ASSETS, ...REQUIRED_BUNDLE_METADATA_ASSETS]
+  const assetNames = REQUIRED_MANIFEST_RECORDED_ASSETS
     .filter((name) => name !== "control-ui.tar.gz");
   const result = validateBundleAssetManifestForDashboard(manifest(assetNames));
 

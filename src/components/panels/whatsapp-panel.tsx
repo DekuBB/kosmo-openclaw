@@ -8,6 +8,7 @@ import type {
   StatusPayload,
 } from "@/components/admin-types";
 import type { ChannelPillModel } from "@/components/panels/channel-panel-shared";
+import type { WhatsAppLinkState } from "@/shared/channels";
 import {
   ChannelCardFrame,
   ChannelCopyValue,
@@ -65,15 +66,31 @@ function getOriginSnapshot(): string | null {
 
 function getWhatsAppPill(args: {
   configured: boolean;
-  status: string;
+  status: WhatsAppLinkState;
 }): ChannelPillModel {
   if (!args.configured) {
     return { label: "offline", variant: "idle" };
   }
+  if (args.status === "linked") {
+    return { label: "linked", variant: "good" };
+  }
   if (args.status === "error") {
     return { label: "error", variant: "bad" };
   }
-  return { label: "connected", variant: "good" };
+  return { label: args.status.replace("-", " "), variant: "warn" };
+}
+
+function getWhatsAppSummary(args: {
+  configured: boolean;
+  status: WhatsAppLinkState;
+  displayName: string | null;
+  linkedPhone: string | null;
+}): string {
+  if (!args.configured) {
+    return "Not configured";
+  }
+  const prefix = args.status === "linked" ? "Linked" : args.status.replace("-", " ");
+  return `${prefix}${args.displayName ? ` · ${args.displayName}` : ""}${args.linkedPhone ? ` · ${args.linkedPhone}` : ""}`;
 }
 
 export function WhatsAppPanel({
@@ -214,11 +231,12 @@ export function WhatsAppPanel({
       configured={wa.configured}
       channelClassName="channel-whatsapp"
       title="WhatsApp (experimental)"
-      summary={
-        wa.configured
-          ? `Connected${wa.displayName ? ` · ${wa.displayName}` : ""}${wa.linkedPhone ? ` · ${wa.linkedPhone}` : ""}`
-          : "Not configured"
-      }
+      summary={getWhatsAppSummary({
+        configured: wa.configured,
+        status: wa.status,
+        displayName: wa.displayName,
+        linkedPhone: wa.linkedPhone,
+      })}
       pill={getWhatsAppPill({ configured: wa.configured, status: wa.status })}
       errors={[panelError, wa.lastError]}
       connectability={wa.connectability}

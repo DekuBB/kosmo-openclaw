@@ -30,8 +30,11 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# local env and linked-project secrets
+# vclaw create --auto-link writes .env.local with ADMIN_SECRET and bypass values.
+.env
+.env.*
+.env*.local
 !.env.example
 
 # vercel
@@ -57,3 +60,4 @@ next-env.d.ts
 bun.lock
 /lat.md/
 .agent-runs/
+.env.local

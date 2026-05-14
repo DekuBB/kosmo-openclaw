@@ -538,6 +538,7 @@ export function getAuthLoginRoute(): SimpleRouteModule {
 }
 
 let _slackManifestRoute: SimpleRouteModule | null = null;
+let _slackAppRoute: SimpleRouteModule | null = null;
 let _slackTestRoute: SimpleRouteModule | null = null;
 let _telegramPreviewRoute: SimpleRouteModule | null = null;
 let _telegramSyncCommandsRoute: SimpleRouteModule | null = null;
@@ -549,6 +550,14 @@ export function getSlackManifestRoute(): SimpleRouteModule {
     _slackManifestRoute = require("@/app/api/channels/slack/manifest/route") as SimpleRouteModule;
   }
   return _slackManifestRoute;
+}
+
+export function getSlackAppRoute(): SimpleRouteModule {
+  if (!_slackAppRoute) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _slackAppRoute = require("@/app/api/channels/slack/app/route") as SimpleRouteModule;
+  }
+  return _slackAppRoute;
 }
 
 export function getSlackTestRoute(): SimpleRouteModule {

@@ -166,6 +166,7 @@ export async function requestJsonCore<T>(
       const result: ActionResult<T> = {
         ok: false,
         error: message,
+        data: payload,
         meta: {
           requestId,
           action,

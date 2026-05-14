@@ -36,16 +36,18 @@ Keep `README.md`, `docs/README.md`, and this file in sync when the guide moves o
 
 ## Local dev against prod env
 
+For production debugging, prefer the linked directory produced by `vclaw create --auto-link --dir ~/dev/vercel-openclaw`. Passing `--dir` is intentional: it deploys and links this local checkout instead of the default managed clone under `~/.vclaw/<scope>/<project>/app`. Use the managed clone for clean install testing, but use `--dir ~/dev/vercel-openclaw` whenever validating local fixes, bundle-compatibility changes, admin/debug patches, or anything not yet present in the managed clone source. `--auto-link` writes `.vercel/project.json`, pulls the admin secret, automation bypass secret, and vclaw project metadata into `.env.local`, and updates `.gitignore` so the local secret file stays untracked. Debug from that directory so admin scripts, Vercel project targeting, and the source checkout all agree.
+
 To tweak the admin UI locally while reading real production data:
 
-1. `vercel link && vercel env pull .env.local --environment=production`
+1. Start from the `--auto-link` directory, or run `vclaw create --auto-link --dir ~/dev/vercel-openclaw` against the target project.
 2. Edit `.env.local`:
    - set `VERCEL_ENV=development` so `isVercelDeployment()` flips and Redis connects (`src/server/store/store.ts:57`)
    - set `LOCAL_READ_ONLY=1` so every admin mutation returns `403 { error: "LOCAL_READ_ONLY" }` (`src/server/auth/route-auth.ts`)
    - unset `VERCEL_AUTH_MODE` so admin-secret mode works locally
 3. `pnpm dev`, then `POST /api/auth/login` with `ADMIN_SECRET` for the session cookie
 
-`getSandboxController()` returns the real v2 SDK whenever `NODE_ENV !== "test"` (`src/server/sandbox/controller.ts:201-211`). Without `LOCAL_READ_ONLY`, `POST /api/admin/stop` from localhost stops the prod sandbox.
+`.env.local` contains live admin and deployment-protection secrets. Do not commit it, paste it into logs, or include it in `.agent-runs` artifacts. `getSandboxController()` returns the real v2 SDK whenever `NODE_ENV !== "test"` (`src/server/sandbox/controller.ts:201-211`). Without `LOCAL_READ_ONLY`, `POST /api/admin/stop` from localhost stops the prod sandbox.
 
 ## Architecture map
 

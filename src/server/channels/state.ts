@@ -17,6 +17,7 @@ import {
 import {
   buildChannelDisplayWebhookUrl,
   buildChannelWebhookUrl,
+  toDisplaySafeWebhookUrl,
 } from "@/server/channels/webhook-urls";
 import { getSlackAppConfig } from "@/server/channels/slack/app-config";
 import { getSlackInstallConfig } from "@/server/channels/slack/install-config";
@@ -211,19 +212,43 @@ function toPublicDiscordState(
     config?.applicationId
       ? `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(config.applicationId)}&scope=bot+applications.commands&permissions=3072`
       : null;
+  const currentEndpointUrl = toDisplaySafeWebhookUrl(config?.endpointUrl ?? null);
+  const compareWebhookUrl = toDisplaySafeWebhookUrl(webhookUrl) ?? webhookUrl;
+  const endpointDrift = Boolean(
+    currentEndpointUrl && currentEndpointUrl !== compareWebhookUrl,
+  );
+  const endpointConfigured = config?.endpointConfigured === true && !endpointDrift;
+  const commandRegistered = config?.commandRegistered === true;
+  const canRepairEndpoint = Boolean(config && publicUrl && endpointDrift);
+  const nextSafeAction: PublicDiscordState["nextSafeAction"] = !config
+    ? "paste-token"
+    : endpointDrift
+      ? "repair-endpoint"
+      : !endpointConfigured
+        ? "configure-endpoint"
+        : !commandRegistered
+          ? "register-command"
+          : inviteUrl
+            ? "run-ask-test"
+            : "invite-bot";
 
   return {
     configured: config !== null,
     webhookUrl,
+    desiredEndpointUrl: compareWebhookUrl,
+    currentEndpointUrl,
+    endpointDrift,
+    canRepairEndpoint,
+    nextSafeAction,
     applicationId: config?.applicationId ?? null,
     publicKey: config?.publicKey ?? null,
     configuredAt: config?.configuredAt ?? null,
     appName: config?.appName ?? null,
     botUsername: config?.botUsername ?? null,
-    endpointConfigured: config?.endpointConfigured === true,
-    endpointUrl: config?.endpointUrl ?? null,
+    endpointConfigured,
+    endpointUrl: currentEndpointUrl,
     endpointError: config?.endpointError ?? null,
-    commandRegistered: config?.commandRegistered === true,
+    commandRegistered,
     commandId: config?.commandId ?? null,
     inviteUrl,
     isPublicUrl: publicUrl,

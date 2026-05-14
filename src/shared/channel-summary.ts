@@ -10,6 +10,7 @@ import {
   normalizeChannelDeliverySnapshot,
   type ChannelDeliverySnapshot,
 } from "@/shared/channel-delivery";
+import type { HostedFeatureSupportMatrix } from "@/shared/hosted-feature-support";
 
 export const WHATSAPP_SUMMARY_DETAIL_ROUTE = "/api/channels/whatsapp" as const;
 export const WHATSAPP_CONNECTION_SEMANTICS = "delivery-enabled" as const;
@@ -85,6 +86,31 @@ export type SlackSummaryEntry = ChannelSummaryEntry & {
   };
 };
 
+export type DiscordSummaryEntry = ChannelSummaryEntry & {
+  endpointConfigured: boolean;
+  desiredEndpointUrl: string | null;
+  currentEndpointUrl: string | null;
+  endpointDrift: boolean;
+  commandRegistered: boolean;
+  commandId: string | null;
+  routeReady: boolean;
+  nativeAccepted: boolean;
+  userVisibleReplyVerified: boolean;
+  readiness: {
+    endpointConfigured: boolean;
+    endpointDrift: boolean;
+    commandRegistered: boolean;
+    routeReady: boolean;
+    nativeAccepted: boolean;
+    userVisibleReplyVerified: boolean;
+    ackSemantics: "deferred-only";
+    lastForward: ChannelLastForwardSummary | null;
+    lastDeliveryState: ChannelDeliveryStateSummary | null;
+    userVisibleReply: ChannelUserVisibleReplySummary | null;
+    reason: string | null;
+  };
+};
+
 export function projectChannelLastForward(
   raw: ChannelLastForward | null | undefined,
   now: number = Date.now(),
@@ -152,8 +178,9 @@ export type WhatsAppSummaryEntry = ChannelSummaryEntry & {
 };
 
 export type ChannelSummaryResponse = {
+  featureSupport: HostedFeatureSupportMatrix;
   slack: SlackSummaryEntry;
   telegram: ChannelSummaryEntry;
-  discord: ChannelSummaryEntry;
+  discord: DiscordSummaryEntry;
   whatsapp: WhatsAppSummaryEntry;
 };

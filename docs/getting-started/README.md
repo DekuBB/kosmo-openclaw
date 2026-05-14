@@ -9,7 +9,8 @@ Use this section before making setup, provisioning, release, bundle, or channel-
 1. [System map](system-map.md) explains the three-repo architecture and the contracts between each layer.
 2. [Operational paths](operational-paths.md) follows create, deploy, sandbox boot, proxying, and channel delivery end to end.
 3. [`vclaw create`](vclaw-create.md) describes the supported install path, important flags, and failure boundaries.
-4. [Release and reliability](release-and-reliability.md) covers bundle compatibility, dashboard verification, CLI publication, and known risks.
+4. [Hosted feature support](hosted-feature-support.md) is the source of truth for supported, experimental, bundled-only, and upstream-only OpenClaw features in the Vercel-hosted path.
+5. [Release and reliability](release-and-reliability.md) covers bundle compatibility, dashboard verification, CLI publication, and known risks.
 
 ## Repository Roles
 
@@ -26,6 +27,7 @@ The guide is the fast path. Use the existing deep docs when you need implementat
 - [Architecture](../architecture.md) for the dashboard subsystem map.
 - [Sandbox Lifecycle and Restore](../lifecycle-and-restore.md) for state transitions, snapshotting, and resume behavior.
 - [Preflight and Launch Verification](../preflight-and-launch-verification.md) for readiness semantics.
+- [Hosted Feature Support](hosted-feature-support.md) before changing claims about channels, companion apps, voice, canvas, plugins, skills, MCP, tools, or model/provider behavior.
 - [Channels and Webhooks](../channels-and-webhooks.md) for channel setup, webhook delivery, and protection behavior.
 - [Environment Variables](../environment-variables.md) for every runtime variable.
 - [Deployment Protection](../deployment-protection.md) for bypass behavior and display-safe URLs.

@@ -702,6 +702,261 @@ test("createSlackAdapter sendReplyRich image regression — existing data image 
   assert.ok(fetchCalls.some((c) => String(c.input).includes("completeUploadExternal")), "should complete image upload");
 });
 
+test("createSlackAdapter sendReplyRich treats transient image upload failures as retryable", async () => {
+  const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+
+  const adapter = createSlackAdapter(
+    {
+      signingSecret: "secret",
+      botToken: "xoxb-token",
+    },
+    {
+      fetchFn: async (input, init) => {
+        fetchCalls.push({ input, init });
+
+        if (String(input).includes("chat.postMessage")) {
+          return new Response(JSON.stringify({ ok: true, ts: "1000.01" }), { status: 200 });
+        }
+        if (String(input).includes("getUploadURLExternal")) {
+          return new Response(
+            JSON.stringify({ ok: true, upload_url: "https://files.slack.com/upload/v1/abc", file_id: "F789" }),
+            { status: 200 },
+          );
+        }
+        if (String(input).includes("files.slack.com")) {
+          return new Response("temporary gateway timeout", { status: 504 });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+    },
+  );
+
+  const message: SlackExtractedMessage = {
+    text: "hello",
+    channel: "C123",
+    threadTs: "123.45",
+    ts: "123.45",
+  };
+
+  const reply: ChannelReply = {
+    text: "Chart ready.",
+    images: [
+      {
+        kind: "data",
+        mimeType: "image/png",
+        base64: "iVBORw0KGgo=",
+        filename: "chart.png",
+      },
+    ],
+  };
+
+  await assert.rejects(
+    adapter.sendReplyRich!(message, reply),
+    (error) => {
+      assert.ok(error instanceof RetryableSendError);
+      assert.match(error.message, /slack_upload_transfer_failed: status=504/);
+      return true;
+    },
+  );
+
+  const completeCalls = fetchCalls.filter((c) => String(c.input).includes("completeUploadExternal"));
+  assert.equal(completeCalls.length, 0, "should not complete a failed upload");
+});
+
+
+test("createSlackAdapter sendReplyRich retries HTTP 504 transfer and completes in thread", async () => {
+  const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  let uploadUrlCalls = 0;
+  let transferCalls = 0;
+
+  const adapter = createSlackAdapter(
+    { signingSecret: "secret", botToken: "xoxb-token" },
+    {
+      fetchFn: async (input, init) => {
+        fetchCalls.push({ input, init });
+        const url = String(input);
+        if (url.includes("chat.postMessage")) {
+          return new Response(JSON.stringify({ ok: true, ts: "1000.01" }), { status: 200 });
+        }
+        if (url.includes("getUploadURLExternal")) {
+          uploadUrlCalls += 1;
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              upload_url: `https://files.slack.com/upload/v1/retry-${uploadUrlCalls}`,
+              file_id: `FRETRY${uploadUrlCalls}`,
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("files.slack.com")) {
+          transferCalls += 1;
+          return new Response(transferCalls === 1 ? "gateway timeout" : "OK", {
+            status: transferCalls === 1 ? 504 : 200,
+          });
+        }
+        if (url.includes("completeUploadExternal")) {
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        throw new Error(`unexpected Slack URL: ${url}`);
+      },
+    },
+  );
+
+  const message: SlackExtractedMessage = {
+    text: "hello",
+    channel: "D0B3416DCF4",
+    threadTs: "1778530504.140709",
+    ts: "1778530504.140709",
+  };
+
+  await adapter.sendReplyRich!(message, {
+    text: "Chart ready.",
+    images: [{ kind: "data", mimeType: "image/png", base64: "iVBORw0KGgo=", filename: "chart.png" }],
+  });
+
+  assert.equal(uploadUrlCalls, 2);
+  assert.equal(transferCalls, 2);
+  const completeCalls = fetchCalls.filter((c) => String(c.input).includes("completeUploadExternal"));
+  assert.equal(completeCalls.length, 1);
+  assert.deepEqual(JSON.parse(completeCalls[0]?.init?.body as string), {
+    files: [{ id: "FRETRY2", title: "chart.png" }],
+    channel_id: "D0B3416DCF4",
+    thread_ts: "1778530504.140709",
+  });
+});
+
+test("createSlackAdapter sendReplyRich retries complete upload with same thread payload", async () => {
+  const completeBodies: unknown[] = [];
+  let completeCalls = 0;
+
+  const adapter = createSlackAdapter(
+    { signingSecret: "secret", botToken: "xoxb-token" },
+    {
+      fetchFn: async (input, init) => {
+        const url = String(input);
+        if (url.includes("chat.postMessage")) {
+          return new Response(JSON.stringify({ ok: true, ts: "1000.01" }), { status: 200 });
+        }
+        if (url.includes("getUploadURLExternal")) {
+          return new Response(
+            JSON.stringify({ ok: true, upload_url: "https://files.slack.com/upload/v1/abc", file_id: "F123" }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("files.slack.com")) {
+          return new Response("OK", { status: 200 });
+        }
+        if (url.includes("completeUploadExternal")) {
+          completeCalls += 1;
+          completeBodies.push(JSON.parse(init?.body as string));
+          return new Response(JSON.stringify({ ok: completeCalls > 1 }), {
+            status: completeCalls === 1 ? 504 : 200,
+          });
+        }
+        throw new Error(`unexpected Slack URL: ${url}`);
+      },
+    },
+  );
+
+  await adapter.sendReplyRich!(
+    { text: "hello", channel: "D0B3416DCF4", threadTs: "1778530504.140709", ts: "1778530504.140709" },
+    { text: "Chart ready.", images: [{ kind: "data", mimeType: "image/png", base64: "iVBORw0KGgo=", filename: "chart.png" }] },
+  );
+
+  assert.equal(completeCalls, 2);
+  assert.deepEqual(completeBodies[0], completeBodies[1]);
+  assert.deepEqual(completeBodies[0], {
+    files: [{ id: "F123", title: "chart.png" }],
+    channel_id: "D0B3416DCF4",
+    thread_ts: "1778530504.140709",
+  });
+});
+
+test("createSlackAdapter sendReplyRich does not retry non-retryable upload failure", async () => {
+  let uploadUrlCalls = 0;
+  let transferCalls = 0;
+
+  const adapter = createSlackAdapter(
+    { signingSecret: "secret", botToken: "xoxb-token" },
+    {
+      fetchFn: async (input) => {
+        const url = String(input);
+        if (url.includes("chat.postMessage")) {
+          return new Response(JSON.stringify({ ok: true, ts: "1000.01" }), { status: 200 });
+        }
+        if (url.includes("getUploadURLExternal")) {
+          uploadUrlCalls += 1;
+          return new Response(
+            JSON.stringify({ ok: true, upload_url: "https://files.slack.com/upload/v1/abc", file_id: "F123" }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("files.slack.com")) {
+          transferCalls += 1;
+          return new Response("bad request", { status: 400 });
+        }
+        throw new Error(`unexpected Slack URL: ${url}`);
+      },
+    },
+  );
+
+  await assert.rejects(
+    adapter.sendReplyRich!(
+      { text: "hello", channel: "D0B3416DCF4", threadTs: "1778530504.140709", ts: "1778530504.140709" },
+      { text: "Chart ready.", images: [{ kind: "data", mimeType: "image/png", base64: "iVBORw0KGgo=", filename: "chart.png" }] },
+    ),
+    /slack_upload_transfer_failed: status=400/,
+  );
+
+  assert.equal(uploadUrlCalls, 1);
+  assert.equal(transferCalls, 1);
+});
+
+test("createSlackAdapter sendReplyRich keeps placeholder on exhausted retryable upload", async () => {
+  const adapter = createSlackAdapter(
+    { signingSecret: "secret", botToken: "xoxb-token" },
+    {
+      fetchFn: async (input) => {
+        const url = String(input);
+        if (url.includes("chat.update")) {
+          return new Response(JSON.stringify({ ok: true, ts: "999.01" }), { status: 200 });
+        }
+        if (url.includes("getUploadURLExternal")) {
+          return new Response(
+            JSON.stringify({ ok: true, upload_url: "https://files.slack.com/upload/v1/abc", file_id: "F123" }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("files.slack.com")) {
+          return new Response("gateway timeout", { status: 504 });
+        }
+        throw new Error(`unexpected Slack URL: ${url}`);
+      },
+    },
+  );
+
+  const message: SlackExtractedMessage = {
+    text: "hello",
+    channel: "D0B3416DCF4",
+    threadTs: "1778530504.140709",
+    ts: "1778530504.140709",
+    processingPlaceholderTs: "999.01",
+  };
+
+  await assert.rejects(
+    adapter.sendReplyRich!(message, {
+      text: "Chart ready.",
+      images: [{ kind: "data", mimeType: "image/png", base64: "iVBORw0KGgo=", filename: "chart.png" }],
+    }),
+    (error) => {
+      assert.ok(error instanceof RetryableSendError);
+      return true;
+    },
+  );
+
+  assert.equal(message.processingPlaceholderTs, "999.01");
+});
 test("createSlackAdapter sendReplyRich uploads video media via the full upload flow", async () => {
   const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
 

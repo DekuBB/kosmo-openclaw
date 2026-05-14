@@ -18,6 +18,11 @@ import type {
   ChannelReadiness,
 } from "@/shared/launch-verification";
 import type { SandboxDiagPayload } from "@/app/api/admin/sandbox-diag/route";
+import {
+  HOSTED_FEATURE_SUPPORT_MATRIX,
+  type HostedFeatureSupportEntry,
+  type HostedFeatureSupportStatus,
+} from "@/shared/hosted-feature-support";
 
 type PreflightCheck = {
   id: string;
@@ -59,6 +64,70 @@ type ChannelsPanelProps = {
   requestJson: RequestJson;
   refresh: () => Promise<void>;
 };
+
+const FEATURE_STATUS_LABELS: Record<HostedFeatureSupportStatus, string> = {
+  supported: "Supported",
+  experimental: "Experimental",
+  "bundled-only": "Bundled only",
+  "upstream-only": "Upstream only",
+  "not-supported": "Not supported",
+};
+
+function FeatureSupportBoundary({ entries }: { entries: HostedFeatureSupportEntry[] }) {
+  const visibleEntries = entries.filter((entry) =>
+    [
+      "channel-slack",
+      "channel-telegram",
+      "channel-discord",
+      "channel-whatsapp",
+      "channels-upstream-rest",
+      "companion-devices",
+      "voice-canvas",
+      "plugins-skills-bundled",
+    ].includes(entry.id),
+  );
+
+  return (
+    <section
+      className="hosted-support-boundary"
+      aria-label="Hosted OpenClaw support boundary"
+      data-feature-support-docs={HOSTED_FEATURE_SUPPORT_MATRIX.docsPath}
+    >
+      <div className="hosted-support-boundary-head">
+        <div>
+          <h3>Hosted OpenClaw support</h3>
+          <p className="muted-copy">
+            This Vercel deployment supports the wrapper-verified surface below; upstream-only features require local OpenClaw until the hosted path has setup, persistence, wake, and verification coverage.
+          </p>
+        </div>
+        <a
+          className="button ghost"
+          href={`https://github.com/vercel-labs/vercel-openclaw/blob/main/${HOSTED_FEATURE_SUPPORT_MATRIX.docsPath}`}
+        >
+          Matrix
+        </a>
+      </div>
+      <div className="hosted-support-grid">
+        {visibleEntries.map((entry) => (
+          <div
+            key={entry.id}
+            className="hosted-support-row"
+            data-feature-id={entry.id}
+            data-hosted-status={entry.hostedStatus}
+          >
+            <div>
+              <span className="hosted-support-feature">{entry.feature}</span>
+              <span className="hosted-support-owner">{entry.owningRepo}</span>
+            </div>
+            <span className={`hosted-support-pill ${entry.hostedStatus}`}>
+              {FEATURE_STATUS_LABELS[entry.hostedStatus]}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 export function getPreflightBlockerIds(
   preflight: Pick<PreflightData, "ok" | "checks"> | null,
@@ -363,6 +432,7 @@ export function ChannelsPanel({
     preflightSummary.ok === false
       ? new Set(preflightSummary.blockerIds)
       : null;
+  const featureSupport = status.featureSupport ?? HOSTED_FEATURE_SUPPORT_MATRIX;
 
   /* ── Sandbox diagnostics fetching ── */
 
@@ -563,6 +633,8 @@ export function ChannelsPanel({
           preflightBlockerIds={preflightBlockerIds}
         />
       </div>
+
+      <FeatureSupportBoundary entries={featureSupport.entries} />
     </article>
   );
 }

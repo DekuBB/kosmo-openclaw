@@ -10,6 +10,10 @@ import {
   setSlackAppConfig,
   type StoredSlackAppConfig,
 } from "@/server/channels/slack/app-config";
+import {
+  buildChannelConnectability,
+  buildChannelConnectBlockedResponse,
+} from "@/server/channels/connectability";
 import { buildSlackManifest } from "@/server/channels/slack/app-definition";
 import {
   createSlackAppFromManifest,
@@ -32,11 +36,12 @@ import { buildPublicUrl, getPublicOrigin } from "@/server/public-url";
  *     configToken:   string             // Slack App Configuration Token
  *     refreshToken?: string             // optional; used to auto-rotate on expiry
  *     appName?:      string             // optional display_information.name override
+ *     botName?:      string             // optional bot_user.display_name override
  *   }
  *
- * The optional `appName` in the body overrides Slack display_information.name
- * and the bot user display name. The slash command remains derived from the
- * owning Vercel project (VCLAW_PROJECT_SCOPE / VCLAW_PROJECT_NAME env vars)
+ * The optional `appName` in the body overrides Slack display_information.name.
+ * The optional `botName` overrides the bot user display name. The slash command
+ * remains derived from the owning Vercel project (VCLAW_PROJECT_SCOPE / VCLAW_PROJECT_NAME env vars)
  * so two deployments can coexist in the same Slack workspace.
  *
  * Response:
@@ -55,8 +60,13 @@ export async function POST(request: Request): Promise<Response> {
   if (auth instanceof Response) return auth;
 
   try {
+    const connectability = await buildChannelConnectability("slack", request);
+    if (!connectability.canConnect) {
+      return buildChannelConnectBlockedResponse(auth, connectability);
+    }
+
     const body = (await request.json().catch(() => null)) as
-      | { configToken?: unknown; refreshToken?: unknown; appName?: unknown }
+      | { configToken?: unknown; refreshToken?: unknown; appName?: unknown; botName?: unknown }
       | null;
     if (!body) {
       throw new ApiError(400, "INVALID_BODY", "Request body must be JSON.");
@@ -64,6 +74,7 @@ export async function POST(request: Request): Promise<Response> {
     const configToken = parseNonEmptyString(body.configToken, "configToken");
     const refreshToken = parseOptionalString(body.refreshToken);
     const appNameOverride = parseOptionalString(body.appName);
+    const botNameOverride = parseOptionalString(body.botName);
 
     const identity = getProjectIdentity();
     const webhookUrl = buildPublicUrl("/api/channels/slack/webhook", request);
@@ -73,6 +84,7 @@ export async function POST(request: Request): Promise<Response> {
       redirectUrl,
       identity,
       appName: appNameOverride,
+      botName: botNameOverride,
     });
 
     const { result, tokenRotated, activeConfigToken, activeRefreshToken, configTokenExpiresAt } =

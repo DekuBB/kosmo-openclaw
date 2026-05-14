@@ -10,6 +10,18 @@ import {
   buildDiscordPublicWebhookUrl,
   setDiscordChannelConfig,
 } from "@/server/channels/state";
+import { buildChannelDisplayWebhookUrl } from "@/server/channels/webhook-urls";
+
+function toDisplaySafeEndpointUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    url.searchParams.delete("x-vercel-protection-bypass");
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
 
 function normalizeBotToken(value: unknown): string {
   if (typeof value !== "string") {
@@ -41,6 +53,8 @@ function endpointConflictResponse(
   currentUrl: string,
   desiredUrl: string,
 ): Response {
+  const currentEndpointUrl = toDisplaySafeEndpointUrl(currentUrl);
+  const desiredEndpointUrl = toDisplaySafeEndpointUrl(desiredUrl);
   const response = Response.json(
     {
       error: {
@@ -48,8 +62,18 @@ function endpointConflictResponse(
         message:
           "Discord interactions endpoint is already set to a different URL. Set forceOverwriteEndpoint=true to replace it.",
       },
-      currentUrl,
-      desiredUrl,
+      currentUrl: currentEndpointUrl,
+      desiredUrl: desiredEndpointUrl,
+      endpointConflict: {
+        currentEndpointUrl,
+        desiredEndpointUrl,
+        endpointDrift: true,
+        canRepairEndpoint: true,
+        repairHint: {
+          method: "PUT",
+          forceOverwriteEndpoint: true,
+        },
+      },
     },
     { status: 409 },
   );
@@ -71,17 +95,37 @@ export const { GET, PUT, DELETE } = createChannelAdminRouteHandlers({
       return state;
     }
 
-    const desiredEndpointUrl = buildDiscordPublicWebhookUrl(request);
+    const desiredEndpointUrl = buildChannelDisplayWebhookUrl("discord", request)!;
     const diagnostics = await fetchDiscordApplicationIdentity(meta.channels.discord.botToken)
-      .then((identity) => ({
-        applicationId: identity.applicationId,
-        currentEndpointUrl: identity.currentInteractionsEndpointUrl ?? null,
-        desiredEndpointUrl,
-        endpointDrift:
-          (identity.currentInteractionsEndpointUrl ?? null) !== desiredEndpointUrl,
-      }))
+      .then((identity) => {
+        const currentEndpointUrl = toDisplaySafeEndpointUrl(
+          identity.currentInteractionsEndpointUrl ?? null,
+        );
+        const endpointDrift = Boolean(
+          currentEndpointUrl && currentEndpointUrl !== desiredEndpointUrl,
+        );
+        return {
+          applicationId: identity.applicationId,
+          currentEndpointUrl,
+          desiredEndpointUrl,
+          endpointDrift,
+          endpointConfigured: currentEndpointUrl === desiredEndpointUrl,
+          commandRegistered: meta.channels.discord?.commandRegistered === true,
+          commandId: meta.channels.discord?.commandId ?? null,
+          canRepairEndpoint: endpointDrift,
+          repairHint: endpointDrift
+            ? { method: "PUT", forceOverwriteEndpoint: true }
+            : null,
+        };
+      })
       .catch((error) => ({
         desiredEndpointUrl,
+        currentEndpointUrl: null,
+        endpointDrift: false,
+        endpointConfigured: state.endpointConfigured,
+        commandRegistered: state.commandRegistered,
+        commandId: state.commandId,
+        canRepairEndpoint: false,
         error: error instanceof Error ? error.message : String(error),
       }));
 
@@ -130,7 +174,20 @@ export const { GET, PUT, DELETE } = createChannelAdminRouteHandlers({
 
     if (autoConfigureEndpoint !== false) {
       const currentUrl = identity.currentInteractionsEndpointUrl ?? null;
-      if (currentUrl && currentUrl !== webhookUrl && forceOverwriteEndpoint !== true) {
+      const currentDisplayUrl = toDisplaySafeEndpointUrl(currentUrl);
+      const webhookDisplayUrl = toDisplaySafeEndpointUrl(webhookUrl);
+      if (
+        currentUrl &&
+        currentDisplayUrl !== webhookDisplayUrl &&
+        forceOverwriteEndpoint !== true
+      ) {
+        await setDiscordChannelConfig({
+          ...updatedConfig,
+          endpointConfigured: false,
+          endpointUrl: currentUrl,
+          endpointError:
+            "Discord interactions endpoint points at a different deployment. Choose explicit endpoint repair before overwriting it.",
+        });
         return endpointConflictResponse(auth, currentUrl, webhookUrl);
       }
 

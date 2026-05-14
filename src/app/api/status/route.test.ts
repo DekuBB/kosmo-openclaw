@@ -174,9 +174,15 @@ test("GET /api/status: includes firewall and channel state", async () => {
     const body = result.json as {
       firewall: { mode: string };
       channels: unknown;
+      featureSupport: { schemaVersion: number; entries: Array<{ id: string; hostedStatus: string }> };
     };
     assert.equal(body.firewall.mode, "learning");
     assert.ok("channels" in body, "should include channels");
+    assert.equal(body.featureSupport.schemaVersion, 1);
+    assert.equal(
+      body.featureSupport.entries.find((entry) => entry.id === "plugins-skills-bundled")?.hostedStatus,
+      "bundled-only",
+    );
   });
 });
 

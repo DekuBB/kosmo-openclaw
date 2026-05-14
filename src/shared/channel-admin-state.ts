@@ -49,6 +49,18 @@ export type PublicTelegramState = {
 export type PublicDiscordState = {
   configured: boolean;
   webhookUrl: string;
+  desiredEndpointUrl: string;
+  currentEndpointUrl: string | null;
+  endpointDrift: boolean;
+  canRepairEndpoint: boolean;
+  nextSafeAction:
+    | "paste-token"
+    | "repair-endpoint"
+    | "configure-endpoint"
+    | "register-command"
+    | "invite-bot"
+    | "run-ask-test"
+    | "inspect-final-reply-path";
   applicationId: string | null;
   publicKey: string | null;
   configuredAt: number | null;

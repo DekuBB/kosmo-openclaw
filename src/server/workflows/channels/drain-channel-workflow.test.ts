@@ -1749,7 +1749,7 @@ test("processChannelStep passes Discord raw body and signature headers to retryi
   assert.equal(capturedDeliveryId, "discord:interaction-handoff-1");
 });
 
-test("processChannelStep clears WhatsApp boot message after accepted forward", async () => {
+test("processChannelStep retains WhatsApp boot message after accepted forward", async () => {
   _resetLogBuffer();
   let clearCalls = 0;
   let updateCalls = 0;
@@ -1794,14 +1794,17 @@ test("processChannelStep clears WhatsApp boot message after accepted forward", a
     { dependencies },
   );
 
-  assert.equal(clearCalls, 1);
+  assert.equal(clearCalls, 0);
   assert.equal(updateCalls, 0);
-  const cleanupLog = getServerLogs().find(
-    (entry) => entry.message === "channels.whatsapp_boot_message_cleared_after_accept",
+  const retainedLog = getServerLogs().find(
+    (entry) => entry.message === "channels.whatsapp_boot_message_retained_after_accept",
   );
-  assert.ok(cleanupLog, "WhatsApp boot cleanup should be logged after native accept");
-  assert.equal(cleanupLog.data?.deliveryId, "whatsapp:wamid.workflow-clear-1");
-  assert.equal(cleanupLog.data?.forwardAttempts, 2);
+  assert.ok(retainedLog, "WhatsApp boot retention should be logged after native accept");
+  assert.equal(retainedLog.data?.deliveryId, "whatsapp:wamid.workflow-clear-1");
+  assert.equal(retainedLog.data?.forwardAttempts, 2);
+  assert.equal(retainedLog.data?.placeholderAction, "retained");
+  assert.equal(retainedLog.data?.clearOnAccept, false);
+  assert.equal(retainedLog.data?.reason, "whatsapp_delete_not_supported");
 });
 
 test("processChannelStep emits Discord and WhatsApp wake summaries", async () => {

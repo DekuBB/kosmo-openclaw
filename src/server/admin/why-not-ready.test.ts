@@ -204,4 +204,143 @@ describe("buildWhyNotReady", () => {
     assert.equal(blocker.evidence.sandboxPort, 8787);
     assert.equal(blocker.evidence.telegramListenerReady, false);
   });
+
+  test("discord endpoint drift and missing command are separate blockers", async () => {
+    const meta = metaFixture();
+    meta.channels.discord = {
+      publicKey: "discord-public-key",
+      applicationId: "discord-app",
+      botToken: "discord-token",
+      configuredAt: Date.now(),
+      endpointConfigured: false,
+      endpointUrl: "https://old.example.com/api/channels/discord/webhook",
+      endpointError: "Discord interactions endpoint points at a different deployment.",
+      commandRegistered: false,
+    };
+
+    const report = await buildWhyNotReady(meta);
+
+    assert.equal(report.channels.discord.ready, false);
+    const kinds = report.channels.discord.blockers.map((b) => b.kind);
+    assert.ok(kinds.includes("endpoint_drift"), `expected endpoint_drift, got ${kinds.join(",")}`);
+    assert.ok(kinds.includes("command_missing"), `expected command_missing, got ${kinds.join(",")}`);
+  });
+
+  test("discord deferred ack without native forward is an observability gap", async () => {
+    const meta = metaFixture();
+    meta.channels.discord = {
+      publicKey: "discord-public-key",
+      applicationId: "discord-app",
+      botToken: "discord-token",
+      configuredAt: Date.now(),
+      endpointConfigured: true,
+      endpointUrl: "https://app.example.com/api/channels/discord/webhook",
+      commandRegistered: true,
+      commandId: "cmd-1",
+    };
+
+    const report = await buildWhyNotReady(meta);
+
+    assert.equal(
+      report.channels.discord.observabilityGaps[0]?.kind,
+      "deferred_ack_without_native_forward",
+    );
+  });
+
+  test("discord native acceptance without visible reply is still not fully ready", async () => {
+    const meta = metaFixture();
+    meta.channels.discord = {
+      publicKey: "discord-public-key",
+      applicationId: "discord-app",
+      botToken: "discord-token",
+      configuredAt: Date.now(),
+      endpointConfigured: true,
+      endpointUrl: "https://app.example.com/api/channels/discord/webhook",
+      commandRegistered: true,
+      commandId: "cmd-1",
+    };
+    meta.channelDiagnostics = {
+      discord: { lastForward: slackForward() },
+    };
+
+    const report = await buildWhyNotReady(meta);
+
+    assert.equal(report.channels.discord.ready, false);
+    assert.equal(
+      report.channels.discord.observabilityGaps[0]?.kind,
+      "native_accepted_without_user_visible_reply",
+    );
+  });
+
+  test("discord observed visible reply is required for why-not-ready readiness", async () => {
+    const meta = metaFixture();
+    const checkedAt = Date.now() - 400;
+    meta.channels.discord = {
+      publicKey: "discord-public-key",
+      applicationId: "discord-app",
+      botToken: "discord-token",
+      configuredAt: Date.now(),
+      endpointConfigured: true,
+      endpointUrl: "https://app.example.com/api/channels/discord/webhook",
+      commandRegistered: true,
+      commandId: "cmd-1",
+    };
+    meta.channelDiagnostics = {
+      discord: {
+        lastForward: slackForward({
+          deliveryId: "discord:interaction-1",
+          userVisibleReply: {
+            status: "observed",
+            checkedAt,
+            observedAt: checkedAt,
+            timeoutMs: null,
+            source: "platform-api",
+            reason: "interaction-edit-observed",
+            evidence: { observer: "discord-interaction-edit" },
+          },
+        }),
+      },
+    };
+
+    const report = await buildWhyNotReady(meta);
+
+    assert.equal(report.channels.discord.ready, true);
+    assert.deepEqual(report.channels.discord.observabilityGaps, []);
+  });
+
+  test("slack recent broken forward wins over stale green config-sync", async () => {
+    const meta = metaFixture();
+    const now = Date.now();
+    meta.channels.slack = {
+      signingSecret: "secret",
+      botToken: "xoxb-test",
+      configuredAt: now,
+      liveConfigSync: {
+        outcome: "applied",
+        reason: "config_written_and_restarted",
+        liveConfigFresh: true,
+        checkedAt: now - 60_000,
+      },
+    };
+    meta.channelDiagnostics = {
+      slack: {
+        lastForward: slackForward({
+          ok: false,
+          status: 404,
+          classification: "handler-not-ready",
+          finalReasonHead: "Not Found",
+          completedAt: now - 1_000,
+        }),
+      },
+    };
+
+    const report = await buildWhyNotReady(meta);
+
+    assert.equal(report.channels.slack.ready, false);
+    assert.ok(
+      report.channels.slack.blockers.some((blocker) => blocker.kind === "handler_not_ready"),
+      "expected handler_not_ready blocker",
+    );
+    assert.equal(report.channels.slack.readinessSnapshot.liveConfigSync, meta.channels.slack.liveConfigSync);
+  });
 });

@@ -43,3 +43,20 @@ export function buildChannelWebhookUrl(
     request,
   );
 }
+
+/**
+ * Normalize a webhook URL for admin display and drift comparisons.
+ * Registered provider URLs may include Vercel's deployment-protection bypass
+ * query; display URLs intentionally strip it, so the bypass alone must not
+ * count as endpoint drift.
+ */
+export function toDisplaySafeWebhookUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    url.searchParams.delete("x-vercel-protection-bypass");
+    return url.toString();
+  } catch {
+    return value;
+  }
+}

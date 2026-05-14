@@ -138,7 +138,7 @@ test("buildBotDisplayName: uses `.` separator to satisfy Slack's [a-z0-9-_.] rul
   assert.match(name, /^[a-z0-9._-]+$/);
 });
 
-test("buildBotDisplayName: app-name override also updates bot display name", () => {
+test("buildBotDisplayName: app-name override updates bot display name when bot override is omitted", () => {
   const name = buildBotDisplayName(
     identity("vercel-labs", "my-bot"),
     "  My Custom Bot!  ",
@@ -147,7 +147,17 @@ test("buildBotDisplayName: app-name override also updates bot display name", () 
   assert.match(name, /^[a-z0-9._-]+$/);
 });
 
-test("buildSlackManifest: app-name override drives app and bot names only", () => {
+test("buildBotDisplayName: bot-name override wins over app-name override", () => {
+  const name = buildBotDisplayName(
+    identity("vercel-labs", "my-bot"),
+    "My Custom App",
+    "Support Bot!",
+  );
+  assert.equal(name, "support-bot");
+  assert.match(name, /^[a-z0-9._-]+$/);
+});
+
+test("buildSlackManifest: app-name override drives app and bot fallback names only", () => {
   const manifest = buildSlackManifest({
     webhookUrl: "https://app.example.com/api/channels/slack/webhook",
     identity: identity("vercel-labs", "my-bot"),
@@ -162,6 +172,27 @@ test("buildSlackManifest: app-name override drives app and bot names only", () =
 
   assert.equal(manifest.display_information.name, "My Custom Bot");
   assert.equal(manifest.features.bot_user.display_name, "my-custom-bot");
+  assert.equal(manifest.features.slash_commands[0]?.command, "/vercel-labs-my-bot");
+});
+
+
+
+test("buildSlackManifest: bot-name override drives only bot display name", () => {
+  const manifest = buildSlackManifest({
+    webhookUrl: "https://app.example.com/api/channels/slack/webhook",
+    identity: identity("vercel-labs", "my-bot"),
+    appName: "My Custom App",
+    botName: "Support Bot!",
+  }) as {
+    display_information: { name: string };
+    features: {
+      bot_user: { display_name: string };
+      slash_commands: Array<{ command: string }>;
+    };
+  };
+
+  assert.equal(manifest.display_information.name, "My Custom App");
+  assert.equal(manifest.features.bot_user.display_name, "support-bot");
   assert.equal(manifest.features.slash_commands[0]?.command, "/vercel-labs-my-bot");
 });
 

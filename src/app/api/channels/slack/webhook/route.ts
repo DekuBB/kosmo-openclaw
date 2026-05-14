@@ -600,6 +600,8 @@ export async function POST(request: Request): Promise<Response> {
               ? "sandbox-not-listening"
               : slackFallbackIsGatewayError
                 ? "proxy-error"
+                : resp.status === 404
+                  ? "handler-not-ready"
                 : "handler-error",
             sandboxUrl: fastPathSandboxUrl,
             bodyHead: respBodyHead,
@@ -615,6 +617,8 @@ export async function POST(request: Request): Promise<Response> {
             ? "sandbox-not-listening"
             : slackFallbackIsGatewayError
               ? "proxy-error"
+              : resp.status === 404
+                ? "handler-not-ready"
               : "handler-error",
           attempts: 1,
           totalMs: Date.now() - fastPathStartedAt,
@@ -668,6 +672,20 @@ export async function POST(request: Request): Promise<Response> {
           : null,
         ...eventInfo,
       }));
+      await recordChannelLastForward("slack", {
+        ok: false,
+        status: null,
+        classification: "fetch-exception",
+        attempts: 1,
+        totalMs: Date.now() - fastPathStartedAt,
+        transport: "public",
+        sandboxUrl: fastPathSandboxUrl,
+        sandboxId: effectiveMeta.sandboxId ?? null,
+        finalReasonHead: error instanceof Error ? error.message : String(error),
+        startedAt: fastPathStartedAt,
+        completedAt: Date.now(),
+        deliveryId: fastPathDedupId ? `slack:${fastPathDedupId}` : null,
+      });
       effectiveMeta = await reconcileStaleRunningStatus();
     }
   } else {

@@ -1327,35 +1327,20 @@ export async function processChannelStep(
             });
           });
       } else if (channel === "whatsapp" && forwardResult.ok) {
-        diag.bootMessageAction = "whatsapp-cleared-after-native-accept";
-        diag.bootMessageClearedAt = Date.now();
-        await existingBootHandle
-          .clear()
-          .then(() => {
-            logInfo("channels.whatsapp_boot_message_cleared_after_accept", {
-              channel,
-              requestId,
-              deliveryId,
-              bootMessageId: bootMessageId ?? null,
-              forwardStatus: forwardResult.status,
-              forwardAttempts: retryingResult?.attempts ?? null,
-              forwardTotalMs: retryingResult?.totalMs ?? null,
-              reason: "native_handler_accepted_update",
-            });
-          })
-          .catch((bootError) => {
-            logWarn("channels.whatsapp_boot_message_cleanup_after_accept_failed", {
-              channel,
-              requestId,
-              deliveryId,
-              bootMessageId: bootMessageId ?? null,
-              forwardStatus: forwardResult.status,
-              error:
-                bootError instanceof Error
-                  ? bootError.message
-                  : String(bootError),
-            });
-          });
+        diag.bootMessageAction = "whatsapp-retained-after-native-accept";
+        diag.bootMessageRetainedAt = Date.now();
+        logInfo("channels.whatsapp_boot_message_retained_after_accept", {
+          channel,
+          requestId,
+          deliveryId,
+          bootMessageId: bootMessageId ?? null,
+          forwardStatus: forwardResult.status,
+          forwardAttempts: retryingResult?.attempts ?? null,
+          forwardTotalMs: retryingResult?.totalMs ?? null,
+          placeholderAction: "retained",
+          clearOnAccept: false,
+          reason: "whatsapp_delete_not_supported",
+        });
       } else {
         // Forward failed. Instead of silently deleting the boot message
         // (which left the user staring at an empty channel after their
@@ -2161,6 +2146,7 @@ async function forwardToNativeHandlerWithRetry(
   const deadline = startedAt + RETRYING_FORWARD_TIMEOUT_MS;
   const retries: Array<{ attempt: number; reason: string; status?: number; error?: string }> = [];
   const attemptsDetail: ForwardAttemptDetail[] = [];
+  let terminalAttemptResult: RetryingForwardResult | null = null;
   // Track whether we have already burned our one-shot AI Gateway credential
   // refresh. The sandbox's AI Gateway OIDC token is injected via firewall
   // transform; if it silently expires between our proactive refresh at
@@ -2314,8 +2300,24 @@ async function forwardToNativeHandlerWithRetry(
             }
           }
           if (attempt >= SANDBOX_NOT_LISTENING_MAX_ATTEMPTS) {
-            // Bail out of retry loop. Falls through to the "exhausted"
-            // branch below the for-loop, which records the final result.
+            const totalMs = Date.now() - startedAt;
+            terminalAttemptResult = {
+              ok: false,
+              status: result.status,
+              attempts: attempt,
+              totalMs,
+              transport,
+              retries,
+              attemptsDetail,
+            };
+            logWarn("channels.retrying_forward_stale_port_terminal", {
+              channel,
+              attempts: attempt,
+              totalMs,
+              retryCount: retries.length,
+              attemptsDetail,
+              deliveryId,
+            });
             break;
           }
         }
@@ -2435,6 +2437,9 @@ async function forwardToNativeHandlerWithRetry(
 
   // Exhausted retries — report as gateway timeout.
   const totalMs = Date.now() - startedAt;
+  if (terminalAttemptResult) {
+    return terminalAttemptResult;
+  }
   logWarn("channels.retrying_forward_exhausted", {
     channel,
     attempts: RETRYING_FORWARD_MAX_ATTEMPTS,

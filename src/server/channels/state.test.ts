@@ -201,11 +201,61 @@ test("configured discord returns invite url and public shape", async () => {
     assert.equal(state.discord.publicKey, "discord-pub-key");
     assert.equal(state.discord.appName, "TestBot");
     assert.equal(state.discord.endpointConfigured, true);
+    assert.equal(state.discord.endpointDrift, false);
+    assert.equal(state.discord.currentEndpointUrl, "https://app.example.com/api/channels/discord/webhook");
+    assert.equal(state.discord.desiredEndpointUrl, "https://app.example.com/api/channels/discord/webhook");
+    assert.equal(state.discord.nextSafeAction, "run-ask-test");
     assert.equal(state.discord.commandRegistered, true);
     assert.equal(state.discord.commandId, "cmd-123");
     assert.ok(state.discord.inviteUrl?.includes("discord-app-id"));
     // Secret should NOT be exposed
     assert.equal("botToken" in state.discord, false);
+  });
+});
+
+test("configured discord ignores deployment-protection bypass query when checking endpoint drift", async () => {
+  await withHarness(async (h) => {
+    await h.mutateMeta((meta) => {
+      meta.channels.discord = makeDiscordConfig({
+        endpointConfigured: true,
+        endpointUrl: "https://app.example.com/api/channels/discord/webhook?x-vercel-protection-bypass=bypass-secret",
+        commandRegistered: true,
+        commandId: "cmd-123",
+      });
+    });
+    const meta = await h.getMeta();
+    const state = await getPublicChannelState(makeRequest(), meta);
+
+    assert.equal(state.discord.endpointConfigured, true);
+    assert.equal(state.discord.endpointDrift, false);
+    assert.equal(state.discord.canRepairEndpoint, false);
+    assert.equal(state.discord.currentEndpointUrl, "https://app.example.com/api/channels/discord/webhook");
+    assert.equal(state.discord.desiredEndpointUrl, "https://app.example.com/api/channels/discord/webhook");
+    assert.equal(state.discord.endpointUrl, "https://app.example.com/api/channels/discord/webhook");
+    assert.equal(state.discord.nextSafeAction, "run-ask-test");
+  });
+});
+
+test("configured discord exposes endpoint drift and safe repair action", async () => {
+  await withHarness(async (h) => {
+    await h.mutateMeta((meta) => {
+      meta.channels.discord = makeDiscordConfig({
+        endpointConfigured: false,
+        endpointUrl: "https://old.example.com/api/channels/discord/webhook",
+        endpointError: "Discord interactions endpoint points at a different deployment.",
+        commandRegistered: true,
+        commandId: "cmd-123",
+      });
+    });
+    const meta = await h.getMeta();
+    const state = await getPublicChannelState(makeRequest(), meta);
+
+    assert.equal(state.discord.endpointConfigured, false);
+    assert.equal(state.discord.endpointDrift, true);
+    assert.equal(state.discord.canRepairEndpoint, true);
+    assert.equal(state.discord.currentEndpointUrl, "https://old.example.com/api/channels/discord/webhook");
+    assert.equal(state.discord.desiredEndpointUrl, "https://app.example.com/api/channels/discord/webhook");
+    assert.equal(state.discord.nextSafeAction, "repair-endpoint");
   });
 });
 

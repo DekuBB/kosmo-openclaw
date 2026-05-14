@@ -19,6 +19,8 @@ Required bundle assets currently include:
 
 The important compatibility risk is asset shape drift. A release with only `openclaw.bundle.mjs` is not enough, and a bundle can build successfully while still failing dashboard restore or channel route readiness.
 
+The hosted plugin and skill contract is currently bundled-only: the dashboard verifies the plugins, skills, sidecars, and runtime assets shipped in the pinned OpenClaw bundle. Arbitrary plugin, skill, ClawHub, MCP, or tool installation needs a persistence, restore, compatibility, rollback, firewall, and launch-verification contract before the hosted UI offers install/update actions.
+
 During migration, dashboard bootstrap treats a missing `asset-manifest.json` as a legacy-bundle warning, but a present malformed or incompatible manifest is fatal. That failure uses `OPENCLAW_BUNDLE_COMPATIBILITY_MISMATCH` and happens before sandbox downloads begin.
 
 ## Dashboard Release
@@ -54,6 +56,7 @@ The workflow should check tag/version agreement, run tests, and publish with npm
 - `OPENCLAW_BUNDLE_URL` points at the intended release asset when pinning.
 - Channel route readiness is tested after OpenClaw plugin/channel runtime changes.
 - Documentation does not treat passing CI as proof of live webhook delivery.
+- Hosted feature claims stay aligned with `src/shared/hosted-feature-support.ts` and [Hosted Feature Support](hosted-feature-support.md).
 
 ## Known Risk Areas
 

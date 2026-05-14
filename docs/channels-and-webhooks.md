@@ -6,6 +6,8 @@ This guide explains how to connect Slack, Telegram, WhatsApp (experimental), and
 
 Channels are a first-class part of the product. They depend on durable state (Redis), a working sandbox lifecycle, and a verified deployment. This guide walks through the full path from "deployment exists" to "channel is safely connected and working."
 
+For the complete hosted-vs-upstream boundary, see [Hosted Feature Support](getting-started/hosted-feature-support.md). The machine-readable matrix is `src/shared/hosted-feature-support.ts` and is exposed as `featureSupport` in `/api/status`, `/api/channels/summary`, and `/api/admin/launch-verify`.
+
 The canonical state model for per-event channel handoff is documented in [Channel Delivery State Machine](channel-delivery-state-machine.md), implemented in `src/shared/channel-delivery.ts`, and governed by `docs/adr/0001-channel-delivery-state-machine-source.md`. This guide describes operator behavior; do not duplicate the transition table here.
 
 ## Before you connect a channel
@@ -59,6 +61,16 @@ The operator rule is simple:
 5. Send a real test message.
 
 Channel save and channel readiness are separate. A channel can be connectable before the current deployment is fully verified for real traffic.
+
+## Hosted channel support matrix
+
+| Channel group | Hosted status | What the wrapper owns | Verification required before ready |
+| --- | --- | --- | --- |
+| Slack | supported | Credential storage, OAuth/manual setup, `/api/channels/slack/webhook`, wake forwarding, `lastForward`, readiness summary. | Route ready, native `/slack/events` accepted, and user-visible reply observation. |
+| Telegram | supported | Bot token storage, webhook secret, `/api/channels/telegram/webhook`, port 8787 native forwarding, wake forwarding, `lastForward`, readiness summary. | Webhook registered, native listener ready, native forward accepted, and user-visible reply observation. |
+| Discord | experimental | Token/public-key storage, interactions endpoint setup, `/ask` registration, `/api/channels/discord/webhook`, workflow forwarding, readiness summary. | Endpoint configured, command registered, native accepted, and final reply visibility verified through the real platform. |
+| WhatsApp | experimental | Meta credential storage, verification route, `/api/channels/whatsapp/webhook`, link-state projection, native forwarding, readiness summary. | Meta webhook verified, session linked, native accepted, and real user-visible reply observed. |
+| Other upstream channels | upstream-only | None in this wrapper. | Add credential storage, platform verification, webhook/native route, wake forwarding, `lastForward`, readiness summary, and real reply proof before claiming hosted support. |
 
 ## Slack
 
@@ -116,6 +128,66 @@ When a Telegram update arrives at the webhook:
 1. The route validates the webhook secret header.
 2. If the sandbox is running, the raw update is forwarded to OpenClaw's native Telegram handler on port 8787 inside the sandbox (the fast path). This preserves full native Telegram features — slash commands, media, inline keyboards, etc.
 3. If the sandbox is stopped, the route sends a boot message to the user, then starts a durable Workflow that resumes the sandbox, forwards the raw update to the native Telegram handler, and lets that handler own the reply behavior.
+
+## WhatsApp
+
+### Connecting WhatsApp
+
+Configure WhatsApp Business credentials from the admin panel. The app stores the phone number ID, access token, verify token, app secret, and optional business account ID, then exposes `/api/channels/whatsapp/webhook` for Meta verification and message delivery.
+
+WhatsApp operator state keeps setup and delivery evidence separate:
+
+- `linkState` is the gateway-side WhatsApp session state, such as `linked`, `needs-login`, or `error`.
+- `lastForward` is the latest native `/whatsapp-webhook` forward result.
+- `lastDeliveryState` is the delivery state-machine projection for the latest known WhatsApp event.
+- `userVisibleReply` is independent evidence that a platform-visible reply was observed.
+
+A linked WhatsApp session means credentials and session state look usable. It is not proof that the latest message reached the native handler or that a user saw a reply. After connecting WhatsApp, send a real WhatsApp message and inspect `/api/channels/summary` plus `channels.whatsapp_*`, `channels.forward_attempt`, and `channels.forward_outcome` logs before treating delivery as proven.
+
+### How WhatsApp messages flow
+
+When Meta calls the webhook:
+
+1. The route handles GET verification separately from POST message delivery.
+2. POST delivery validates `x-hub-signature-256` against the raw body and skips non-message callbacks without starting delivery.
+3. If the sandbox is running, the validated raw payload is forwarded to OpenClaw's native `/whatsapp-webhook` handler on port 3000.
+4. If the sandbox is stopped, the route may send a boot message, then starts the shared Workflow wake path with the original raw body and forward headers.
+5. The native WhatsApp adapter owns final message processing and reply behavior.
+
+## Discord
+
+### Connecting Discord
+
+Create or open a Discord application in the Discord Developer Portal, add a bot, and copy the bot token. Paste that token into the Discord panel. The app strips an optional `Bot ` prefix, validates the token with Discord, fetches the application identity, and stores the application ID, public key, app name, and bot username. The public key is required for Ed25519 signature validation; Discord webhooks are rejected until that key is saved.
+
+Initial connect can do two independent setup actions:
+
+- Configure the Discord interactions endpoint to this deployment's `/api/channels/discord/webhook` URL.
+- Register the global `/ask` application command.
+
+Those states are intentionally separate. A valid endpoint does not prove `/ask` exists, and a registered command does not prove Discord points at this deployment. The invite link is available whenever an application ID is known so the operator can add the bot to a server and run a real `/ask` test.
+
+If Discord already has a different interactions endpoint, `PUT /api/channels/discord` returns `409 DISCORD_ENDPOINT_CONFLICT` with the current endpoint, this deployment's desired endpoint, and a repair hint. The admin panel shows both URLs and offers **Use this deployment endpoint** or **Keep existing endpoint**. Overwriting is explicit because it changes which deployment owns the Discord application. Operator-visible URLs are display-safe and never include the deployment protection bypass secret.
+
+Manual command registration remains available through `POST /api/channels/discord/register-command`. That route only registers `/ask`; it does not mutate endpoint configuration.
+
+### How Discord interactions flow
+
+When Discord calls the interactions endpoint:
+
+1. The route validates `x-signature-ed25519` and `x-signature-timestamp` with the stored Discord public key.
+2. PING interactions (`type: 1`) return `type: 1`.
+3. Command interactions return `type: 5` as a deferred ACK and start the workflow path.
+4. The workflow forwards the original raw body and signature headers to OpenClaw's native `/discord-webhook` handler on port 3000.
+5. OpenClaw owns the final interaction edit or fallback channel reply.
+
+The `type: 5` deferred ACK is only route acceptance. It is not native handler acceptance and it is not proof that a user saw a reply. Readiness keeps these signals separate:
+
+- `routeReady` means Discord setup points at the endpoint and `/ask` is registered.
+- `nativeAccepted` means the native `/discord-webhook` path recently accepted the forwarded interaction.
+- `userVisibleReplyVerified` means reply evidence was observed through an interaction edit or fallback channel reply.
+
+After endpoint and command setup, invite the bot, run `/ask` in Discord, return to the admin panel, and confirm the final reply path. If the panel says Discord accepted the initial interaction response but no user-visible OpenClaw reply was observed, inspect `channels.discord_*`, `channels.forward_attempt`, and `channels.forward_outcome` logs rather than treating endpoint setup as complete delivery.
 
 ## Protected deployments
 

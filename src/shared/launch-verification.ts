@@ -1,4 +1,5 @@
 import type { ChannelName } from "@/shared/channels";
+import type { HostedFeatureSupportMatrix } from "@/shared/hosted-feature-support";
 import type { RestoreDecision } from "@/shared/restore-decision";
 import type { RestorePreparedStatus, RestorePreparedReason } from "@/shared/types";
 
@@ -194,6 +195,7 @@ export type LaunchVerificationPayload = {
   startedAt: string;
   completedAt: string;
   phases: LaunchVerificationPhase[];
+  featureSupport: HostedFeatureSupportMatrix;
   diagnostics?: LaunchVerificationDiagnostics;
   runtime?: LaunchVerificationRuntime;
   sandboxHealth?: LaunchVerificationSandboxHealth;

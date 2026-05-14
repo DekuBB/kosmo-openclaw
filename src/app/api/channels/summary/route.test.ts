@@ -101,6 +101,19 @@ test("GET /api/channels/summary: returns summary for all channels including what
     assert.equal(body.telegram.lastDeliveryState, null);
     assert.equal(body.discord.lastDeliveryState, null);
     assert.equal(body.whatsapp.lastDeliveryState, null);
+    assert.equal(body.featureSupport.schemaVersion, 1);
+    assert.equal(
+      body.featureSupport.entries.find((entry) => entry.id === "channel-discord")?.hostedStatus,
+      "experimental",
+    );
+    assert.equal(
+      body.featureSupport.entries.find((entry) => entry.id === "channel-whatsapp")?.hostedStatus,
+      "experimental",
+    );
+    assert.equal(
+      body.featureSupport.entries.find((entry) => entry.id === "channels-upstream-rest")?.hostedStatus,
+      "upstream-only",
+    );
   });
 });
 
@@ -331,6 +344,52 @@ test("GET /api/channels/summary: whatsapp error exposes linkState and lastError"
   });
 });
 
+test("GET /api/channels/summary: WhatsApp separates link state from native and visible reply state", async () => {
+  await withTestEnv(async () => {
+    const completedAt = Date.now() - 1_000;
+    await mutateMeta((meta) => {
+      meta.channels.whatsapp = {
+        enabled: true,
+        configuredAt: Date.now(),
+        lastKnownLinkState: "linked",
+        linkedPhone: "+1234567890",
+      };
+      meta.channelDiagnostics = {
+        whatsapp: {
+          lastForward: {
+            ok: true,
+            status: 200,
+            classification: "accepted",
+            attempts: 1,
+            totalMs: 42,
+            transport: "public",
+            sandboxUrl: "https://sandbox.example.com",
+            sandboxId: "sbx-test",
+            finalReasonHead: null,
+            startedAt: completedAt - 100,
+            completedAt,
+            deliveryId: "whatsapp:wamid-1",
+          } as any,
+        },
+      };
+    });
+
+    const route = getChannelsSummaryRoute();
+    const request = buildAuthGetRequest("/api/channels/summary");
+    const result = await callRoute(route.GET!, request);
+
+    assert.equal(result.status, 200);
+    const body = result.json as ChannelSummaryResponse;
+
+    assert.equal(body.whatsapp.configured, true);
+    assert.equal(body.whatsapp.linkState, "linked");
+    assert.equal(body.whatsapp.lastForward?.classification, "accepted");
+    assert.equal(body.whatsapp.lastDeliveryState?.state, "visibility-unknown");
+    assert.equal(body.whatsapp.userVisibleReply?.status, "unknown");
+    assert.equal("deliveryReady" in body.whatsapp, false);
+  });
+});
+
 test("GET /api/channels/summary: native accepted Slack forward keeps user-visible reply unknown", async () => {
   await withTestEnv(async () => {
     const completedAt = Date.now() - 1_000;
@@ -523,6 +582,176 @@ test("GET /api/channels/summary: observed user-visible reply projects as verifie
     assert.equal(body.slack.lastDeliveryState?.state, "reply-observed");
     assert.equal(body.slack.userVisibleReply?.status, "observed");
     assert.equal(body.slack.readiness.userVisibleReplyVerified, true);
+  });
+});
+
+test("GET /api/channels/summary: Discord separates route, native, and visible reply readiness", async () => {
+  await withTestEnv(async () => {
+    const completedAt = Date.now() - 1_000;
+    await mutateMeta((meta) => {
+      meta.channels.discord = {
+        publicKey: "discord-public-key",
+        applicationId: "discord-app",
+        botToken: "discord-token",
+        configuredAt: Date.now(),
+        endpointConfigured: true,
+        endpointUrl: "http://localhost:3000/api/channels/discord/webhook",
+        commandRegistered: true,
+        commandId: "cmd-1",
+      };
+      meta.channelDiagnostics = {
+        discord: {
+          lastForward: {
+            ok: true,
+            status: 200,
+            classification: "accepted",
+            attempts: 1,
+            totalMs: 42,
+            transport: "public",
+            sandboxUrl: "https://sandbox.example.com",
+            sandboxId: "sbx-test",
+            finalReasonHead: null,
+            startedAt: completedAt - 100,
+            completedAt,
+            deliveryId: "discord:interaction-1",
+          } as any,
+        },
+      };
+    });
+
+    const route = getChannelsSummaryRoute();
+    const request = buildAuthGetRequest("/api/channels/summary");
+    const result = await callRoute(route.GET!, request);
+
+    assert.equal(result.status, 200);
+    const body = result.json as ChannelSummaryResponse;
+
+    assert.equal(body.discord.routeReady, true);
+    assert.equal(body.discord.nativeAccepted, true);
+    assert.equal(body.discord.userVisibleReplyVerified, false);
+    assert.equal(body.discord.readiness.ackSemantics, "deferred-only");
+    assert.equal(body.discord.readiness.reason, "discord_user_visible_reply_not_observed");
+    assert.equal(body.discord.lastDeliveryState?.state, "visibility-unknown");
+  });
+});
+
+test("GET /api/channels/summary: Discord endpoint drift blocks route readiness", async () => {
+  await withTestEnv(async () => {
+    await mutateMeta((meta) => {
+      meta.channels.discord = {
+        publicKey: "discord-public-key",
+        applicationId: "discord-app",
+        botToken: "discord-token",
+        configuredAt: Date.now(),
+        endpointConfigured: false,
+        endpointUrl: "https://old.example.com/api/channels/discord/webhook",
+        endpointError: "Discord interactions endpoint points at a different deployment.",
+        commandRegistered: true,
+        commandId: "cmd-1",
+      };
+    });
+
+    const route = getChannelsSummaryRoute();
+    const request = buildAuthGetRequest("/api/channels/summary");
+    const result = await callRoute(route.GET!, request);
+
+    assert.equal(result.status, 200);
+    const body = result.json as ChannelSummaryResponse;
+
+    assert.equal(body.discord.endpointDrift, true);
+    assert.equal(body.discord.routeReady, false);
+    assert.equal(body.discord.nativeAccepted, false);
+    assert.equal(body.discord.userVisibleReplyVerified, false);
+    assert.equal(body.discord.readiness.reason, "discord_endpoint_drift");
+  });
+});
+
+test("GET /api/channels/summary: Discord endpoint bypass query alone is not drift", async () => {
+  await withTestEnv(async () => {
+    await mutateMeta((meta) => {
+      meta.channels.discord = {
+        publicKey: "discord-public-key",
+        applicationId: "discord-app",
+        botToken: "discord-token",
+        configuredAt: Date.now(),
+        endpointConfigured: true,
+        endpointUrl: "http://localhost:3000/api/channels/discord/webhook?x-vercel-protection-bypass=bypass-secret",
+        commandRegistered: true,
+        commandId: "cmd-1",
+      };
+    });
+
+    const route = getChannelsSummaryRoute();
+    const request = buildAuthGetRequest("/api/channels/summary");
+    const result = await callRoute(route.GET!, request);
+
+    assert.equal(result.status, 200);
+    const body = result.json as ChannelSummaryResponse;
+
+    assert.equal(body.discord.endpointDrift, false);
+    assert.equal(body.discord.routeReady, true);
+    assert.equal(body.discord.currentEndpointUrl, "http://localhost:3000/api/channels/discord/webhook");
+    assert.equal(body.discord.desiredEndpointUrl, "http://localhost:3000/api/channels/discord/webhook");
+    assert.equal(body.discord.readiness.endpointDrift, false);
+    assert.equal(body.discord.readiness.routeReady, true);
+    assert.equal(body.discord.readiness.reason, "discord_native_acceptance_not_observed");
+  });
+});
+
+test("GET /api/channels/summary: Discord observed visible reply is the final readiness signal", async () => {
+  await withTestEnv(async () => {
+    const checkedAt = Date.now() - 500;
+    await mutateMeta((meta) => {
+      meta.channels.discord = {
+        publicKey: "discord-public-key",
+        applicationId: "discord-app",
+        botToken: "discord-token",
+        configuredAt: Date.now(),
+        endpointConfigured: true,
+        endpointUrl: "http://localhost:3000/api/channels/discord/webhook",
+        commandRegistered: true,
+        commandId: "cmd-1",
+      };
+      meta.channelDiagnostics = {
+        discord: {
+          lastForward: {
+            ok: true,
+            status: 200,
+            classification: "accepted",
+            attempts: 1,
+            totalMs: 42,
+            transport: "public",
+            sandboxUrl: "https://sandbox.example.com",
+            sandboxId: "sbx-test",
+            finalReasonHead: null,
+            startedAt: checkedAt - 100,
+            completedAt: checkedAt,
+            deliveryId: "discord:interaction-1",
+            userVisibleReply: {
+              status: "observed",
+              checkedAt,
+              observedAt: checkedAt,
+              timeoutMs: null,
+              source: "platform-api",
+              reason: "interaction-edit-observed",
+              evidence: { observer: "discord-interaction-edit" },
+            },
+          },
+        },
+      };
+    });
+
+    const route = getChannelsSummaryRoute();
+    const request = buildAuthGetRequest("/api/channels/summary");
+    const result = await callRoute(route.GET!, request);
+
+    assert.equal(result.status, 200);
+    const body = result.json as ChannelSummaryResponse;
+
+    assert.equal(body.discord.routeReady, true);
+    assert.equal(body.discord.nativeAccepted, true);
+    assert.equal(body.discord.userVisibleReplyVerified, true);
+    assert.equal(body.discord.readiness.reason, null);
   });
 });
 

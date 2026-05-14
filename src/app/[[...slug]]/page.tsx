@@ -15,6 +15,7 @@ import { buildRestoreTargetPlan } from "@/server/sandbox/restore-attestation";
 import { getSandboxSleepConfig } from "@/server/sandbox/timeout";
 import type { StatusPayload } from "@/components/admin-types";
 import { GATEWAY_CHAT_PATH } from "@/shared/gateway-paths";
+import { getHostedFeatureSupportMatrix } from "@/shared/hosted-feature-support";
 
 async function getInitialStatus(): Promise<StatusPayload | null> {
   try {
@@ -69,6 +70,7 @@ async function getInitialStatus(): Promise<StatusPayload | null> {
       setupProgress: null,
       firewall: { ...meta.firewall, wouldBlock: computeWouldBlock(meta.firewall) },
       channels: await getPublicChannelState(syntheticRequest, meta),
+      featureSupport: getHostedFeatureSupportMatrix(),
       restoreTarget: {
         restorePreparedStatus: meta.restorePreparedStatus,
         restorePreparedReason: meta.restorePreparedReason,

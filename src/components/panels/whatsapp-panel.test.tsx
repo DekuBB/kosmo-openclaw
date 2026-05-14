@@ -113,6 +113,11 @@ function makeStatus(
       discord: {
         configured: false,
         webhookUrl: "",
+        desiredEndpointUrl: "",
+        currentEndpointUrl: null,
+        endpointDrift: false,
+        canRepairEndpoint: false,
+        nextSafeAction: "paste-token",
         applicationId: null,
         publicKey: null,
         configuredAt: null,
@@ -220,11 +225,11 @@ test("WhatsAppPanel accepts failure-shaped RunAction and RequestJson stubs", () 
     />,
   );
 
-  assert.ok(html.includes("Connected"), "renders connected state with failure stubs");
+  assert.ok(html.includes("Linked"), "renders linked state with failure stubs");
   assert.ok(html.includes("Disconnect"), "disconnect button present with failure stubs");
 });
 
-test("WhatsAppPanel renders connected details for configured accounts", () => {
+test("WhatsAppPanel renders linked details for configured accounts", () => {
   const html = renderPanel(
     makeStatus({
       configured: true,
@@ -240,11 +245,32 @@ test("WhatsAppPanel renders connected details for configured accounts", () => {
     }),
   );
 
-  assert.ok(html.includes("Connected · Support Inbox · +1 555 010 1000"));
+  assert.ok(html.includes("Linked · Support Inbox · +1 555 010 1000"));
   assert.ok(html.includes("Business account"));
   assert.ok(html.includes("Webhook URL"));
   assert.ok(html.includes("linked"));
   assert.ok(html.includes("https://openclaw.example/api/channels/whatsapp/webhook"));
   assert.ok(html.includes("Update credentials"));
   assert.ok(html.includes("Disconnect"));
+});
+
+test("WhatsAppPanel does not show non-linked sessions as connected", () => {
+  const html = renderPanel(
+    makeStatus({
+      configured: true,
+      webhookUrl: "https://openclaw.example/api/channels/whatsapp/webhook",
+      status: "needs-login",
+      displayName: "Support Inbox",
+      lastError: "scan QR to continue",
+      connectability: {
+        ...makeConnectability(),
+        issues: [],
+        status: "pass",
+      },
+    }),
+  );
+
+  assert.ok(html.includes("needs login · Support Inbox"));
+  assert.ok(html.includes("needs login"));
+  assert.equal(html.includes("Connected · Support Inbox"), false);
 });

@@ -26,6 +26,14 @@ The supported install path is `vclaw create` because it owns the full chain: loc
 
 Key sources live in the `vclaw` repository: `src/commands/create.mjs`, `src/steps/bundle.mjs`, `src/steps/env.mjs`, `src/steps/deploy.mjs`, and `src/steps/run-verify.mjs`.
 
+## Production Debugging From A Linked Workspace
+
+The best default for production debugging is a `vclaw create --auto-link --dir <local vercel-openclaw checkout>` run against the deployment you are investigating. `--auto-link` writes `.vercel/project.json` plus a local `.env.local` containing `ADMIN_SECRET`, `VERCEL_AUTOMATION_BYPASS_SECRET`, `VCLAW_PROJECT_SCOPE`, and `VCLAW_PROJECT_NAME`. From that directory, `vercel`, `vclaw`, admin curl scripts, and source inspection all target the same project.
+
+Keep `.env.local` local and untracked. It is intentionally covered by `.gitignore`, along with `.vercel` and `.agent-runs/`. Save sanitized evidence under `.agent-runs/...`, but never copy admin secrets, bypass secrets, bot tokens, webhook secrets, or platform access tokens into artifacts or handoffs.
+
+Use `LOCAL_READ_ONLY=1` in `.env.local` when running `pnpm dev` only to inspect production metadata. Remove it only for an intentional mutation test, because local admin routes still use the real production sandbox controller outside `NODE_ENV=test`.
+
 ## Sandbox Boot And Proxy
 
 ```mermaid

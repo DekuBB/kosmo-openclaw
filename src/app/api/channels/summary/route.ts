@@ -2,6 +2,7 @@ import type { ChannelLastForward, WhatsAppLinkState } from "@/shared/channels";
 import type { ChannelDeliverySnapshot } from "@/shared/channel-delivery";
 import {
   type ChannelUserVisibleReplySummary,
+  type DiscordSummaryEntry,
   type ChannelSummaryEntry,
   type ChannelSummaryResponse,
   type SlackSummaryEntry,
@@ -14,7 +15,12 @@ import {
 import { requireJsonRouteAuth } from "@/server/auth/route-auth";
 import { logError, logInfo } from "@/server/log";
 import { getInitializedMeta } from "@/server/store/store";
+import {
+  buildChannelDisplayWebhookUrl,
+  toDisplaySafeWebhookUrl,
+} from "@/server/channels/webhook-urls";
 import { jsonError } from "@/shared/http";
+import { getHostedFeatureSupportMatrix } from "@/shared/hosted-feature-support";
 
 function projectReplyFromDelivery(
   reply: ChannelDeliverySnapshot["reply"] | null | undefined,
@@ -217,6 +223,94 @@ function buildWhatsAppSummaryEntry(
   return entry;
 }
 
+function buildDiscordSummaryEntry(
+  config:
+    | {
+        endpointConfigured?: boolean;
+        endpointUrl?: string;
+        endpointError?: string;
+        commandRegistered?: boolean;
+        commandId?: string;
+      }
+    | null
+    | undefined,
+  desiredEndpointUrl: string,
+  lastForward: ChannelLastForward | null | undefined,
+  lastDeliveryState: ChannelDeliverySnapshot | null | undefined,
+  now: number,
+): DiscordSummaryEntry {
+  const configured = config !== null && config !== undefined;
+  const lastForwardSummary = projectChannelLastForward(lastForward, now);
+  const lastDeliverySummary = projectChannelDeliveryState(
+    lastDeliveryState,
+    lastForward,
+    "discord",
+    now,
+  );
+  const userVisibleReply =
+    lastForwardSummary?.userVisibleReply ??
+    projectReplyFromDelivery(lastDeliverySummary?.reply, now);
+  const nativeAccepted =
+    lastForwardSummary?.ok === true &&
+    lastForwardSummary.classification === "accepted";
+  const userVisibleReplyVerified = userVisibleReply?.status === "observed";
+  const endpointConfigured = config?.endpointConfigured === true;
+  const currentEndpointUrl = toDisplaySafeWebhookUrl(config?.endpointUrl ?? null);
+  const compareDesiredEndpointUrl = toDisplaySafeWebhookUrl(desiredEndpointUrl) ?? desiredEndpointUrl;
+  const endpointDrift = Boolean(
+    currentEndpointUrl &&
+      (currentEndpointUrl !== compareDesiredEndpointUrl ||
+        config?.endpointError?.toLowerCase().includes("different deployment") === true),
+  );
+  const commandRegistered = config?.commandRegistered === true;
+
+  let reason: string | null = null;
+  if (!configured) {
+    reason = "discord_not_configured";
+  } else if (endpointDrift) {
+    reason = "discord_endpoint_drift";
+  } else if (!endpointConfigured) {
+    reason = "discord_endpoint_not_configured";
+  } else if (!commandRegistered) {
+    reason = "discord_ask_command_not_registered";
+  } else if (!nativeAccepted) {
+    reason = "discord_native_acceptance_not_observed";
+  } else if (!userVisibleReplyVerified) {
+    reason = "discord_user_visible_reply_not_observed";
+  }
+
+  return {
+    connected: configured,
+    configured,
+    lastError: config?.endpointError ?? null,
+    lastForward: lastForwardSummary,
+    lastDeliveryState: lastDeliverySummary,
+    userVisibleReply,
+    endpointConfigured,
+    desiredEndpointUrl: compareDesiredEndpointUrl,
+    currentEndpointUrl,
+    endpointDrift,
+    commandRegistered,
+    commandId: config?.commandId ?? null,
+    routeReady: configured && endpointConfigured && !endpointDrift && commandRegistered,
+    nativeAccepted,
+    userVisibleReplyVerified,
+    readiness: {
+      endpointConfigured,
+      endpointDrift,
+      commandRegistered,
+      routeReady: configured && endpointConfigured && !endpointDrift && commandRegistered,
+      nativeAccepted,
+      userVisibleReplyVerified,
+      ackSemantics: "deferred-only",
+      lastForward: lastForwardSummary,
+      lastDeliveryState: lastDeliverySummary,
+      userVisibleReply,
+      reason,
+    },
+  };
+}
+
 export async function GET(request: Request): Promise<Response> {
   const auth = await requireJsonRouteAuth(request);
   if (auth instanceof Response) {
@@ -227,8 +321,10 @@ export async function GET(request: Request): Promise<Response> {
     const meta = await getInitializedMeta();
     const now = Date.now();
     const diag = meta.channelDiagnostics ?? {};
+    const discordDisplayWebhookUrl = buildChannelDisplayWebhookUrl("discord", request)!;
 
     const body: ChannelSummaryResponse = {
+      featureSupport: getHostedFeatureSupportMatrix(),
       slack: buildSlackSummaryEntry(
         meta.channels.slack,
         diag.slack?.lastForward ?? null,
@@ -243,10 +339,9 @@ export async function GET(request: Request): Promise<Response> {
         diag.telegram?.lastDeliveryState ?? null,
         now,
       ),
-      discord: buildSummaryEntry(
-        "discord",
-        meta.channels.discord !== null,
-        meta.channels.discord?.endpointError ?? null,
+      discord: buildDiscordSummaryEntry(
+        meta.channels.discord,
+        discordDisplayWebhookUrl,
         diag.discord?.lastForward ?? null,
         diag.discord?.lastDeliveryState ?? null,
         now,

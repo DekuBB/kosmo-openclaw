@@ -94,6 +94,11 @@ function makeStatus(): StatusPayload {
       discord: {
         configured: false,
         webhookUrl: "",
+        desiredEndpointUrl: "",
+        currentEndpointUrl: null,
+        endpointDrift: false,
+        canRepairEndpoint: false,
+        nextSafeAction: "paste-token",
         applicationId: null,
         publicKey: null,
         configuredAt: null,
@@ -158,6 +163,26 @@ test("ChannelsPanel renders all four channel cards", () => {
   assert.ok(html.includes("channel-telegram"), "Telegram card must render");
   assert.ok(html.includes("channel-discord"), "Discord card must render");
   assert.ok(html.includes("channel-whatsapp"), "WhatsApp card must render");
+});
+
+test("ChannelsPanel renders hosted support boundary", () => {
+  const html = renderChannelsPanel();
+
+  assert.ok(html.includes("Hosted OpenClaw support"), "support boundary heading must render");
+  assert.ok(html.includes('data-feature-support-docs="docs/getting-started/hosted-feature-support.md"'));
+  assert.ok(html.includes('href="https://github.com/vercel-labs/vercel-openclaw/blob/main/docs/getting-started/hosted-feature-support.md"'));
+  assert.ok(html.includes('data-feature-id="channel-slack"'));
+  assert.ok(html.includes('data-feature-id="channel-telegram"'));
+  assert.ok(html.includes('data-feature-id="channel-discord"'));
+  assert.ok(html.includes('data-feature-id="channel-whatsapp"'));
+  assert.ok(html.includes('data-feature-id="channels-upstream-rest"'));
+  assert.ok(html.includes('data-feature-id="companion-devices"'));
+  assert.ok(html.includes('data-feature-id="voice-canvas"'));
+  assert.ok(html.includes('data-feature-id="plugins-skills-bundled"'));
+  assert.ok(html.includes('data-hosted-status="supported"'));
+  assert.ok(html.includes('data-hosted-status="experimental"'));
+  assert.ok(html.includes('data-hosted-status="upstream-only"'));
+  assert.ok(html.includes('data-hosted-status="bundled-only"'));
 });
 
 test("ChannelsPanel exposes preflight state as data attributes", () => {

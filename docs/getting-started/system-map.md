@@ -34,6 +34,7 @@ flowchart LR
 - `vercel-openclaw` must inject dynamic config and credentials into the sandbox without leaking AI Gateway tokens into sandbox files or operator-visible logs.
 - OpenClaw bundle releases must include the sidecar assets expected by `vclaw` and the dashboard bootstrap path.
 - Channel delivery must distinguish setup, route readiness, native acceptance, and user-visible reply.
+- Hosted feature claims must come from [Hosted Feature Support](hosted-feature-support.md), not from upstream OpenClaw docs alone. Companion devices, voice, canvas, arbitrary channel adapters, and arbitrary plugin/skill installation remain upstream-only or bundled-only until the hosted wrapper owns setup, persistence, proxying, and verification for them.
 
 ## Dashboard Ownership
 

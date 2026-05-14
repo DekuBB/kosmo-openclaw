@@ -204,3 +204,43 @@ test("Slack manifest: uses NEXT_PUBLIC_BASE_DOMAIN when set", async () => {
     });
   });
 });
+
+test("Slack manifest: operator JSON never includes protection bypass secret", async () => {
+  await withHarness(async () => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://openclaw.example.com";
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET = "super-secret-bypass";
+    try {
+      const route = getSlackManifestRoute();
+      const req = buildAuthGetRequest("/api/channels/slack/manifest");
+      const result = await callRoute(route.GET!, req);
+
+      assert.equal(result.status, 200);
+      assert.ok(
+        !result.text.includes("super-secret-bypass"),
+        "manifest response must not expose the raw bypass secret",
+      );
+      assert.ok(
+        !result.text.includes("x-vercel-protection-bypass"),
+        "manifest response must not expose the bypass query parameter",
+      );
+
+      const body = result.json as {
+        manifest: { settings: { event_subscriptions: { request_url: string } } };
+        createAppUrl: string;
+      };
+      assert.equal(
+        body.manifest.settings.event_subscriptions.request_url,
+        "https://openclaw.example.com/api/channels/slack/webhook",
+      );
+      const manifestJson = new URL(body.createAppUrl).searchParams.get("manifest_json");
+      assert.ok(manifestJson, "createAppUrl must include Slack manifest JSON");
+      assert.ok(
+        !decodeURIComponent(manifestJson).includes("x-vercel-protection-bypass"),
+        "encoded Slack create URL must also stay display-safe",
+      );
+    } finally {
+      delete process.env.NEXT_PUBLIC_APP_URL;
+      delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    }
+  });
+});

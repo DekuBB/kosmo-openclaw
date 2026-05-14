@@ -103,6 +103,11 @@ function makeStatus(
       discord: {
         configured: false,
         webhookUrl: "",
+        desiredEndpointUrl: "",
+        currentEndpointUrl: null,
+        endpointDrift: false,
+        canRepairEndpoint: false,
+        nextSafeAction: "paste-token",
         applicationId: null,
         publicKey: null,
         configuredAt: null,

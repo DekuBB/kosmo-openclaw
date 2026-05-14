@@ -189,11 +189,14 @@ After `vclaw create` finishes:
 3. **Verify.** `vclaw` already ran launch verification once. Re-run it from the admin panel any time you change config. Preflight is only a config-readiness check; it does not prove the sandbox can complete a real channel delivery.
 4. **Connect channels.** Wire up Slack, Telegram, WhatsApp (experimental), or Discord (experimental) from the admin panel — or pre-wire Telegram and Slack during `vclaw create` itself with `--telegram` / `--slack --slack-signing-secret`. For Slack OAuth install, set `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, and `SLACK_SIGNING_SECRET`, or enter credentials manually. A deployment is channel-ready only after destructive launch verification passes and `channelReadiness.ready` is `true`.
 
+See [Hosted Feature Support](docs/getting-started/hosted-feature-support.md) for the exact hosted surface. Upstream-only OpenClaw features such as companion nodes, voice, canvas, arbitrary channel adapters, and arbitrary plugin/skill installation are not presented as hosted support until this wrapper has setup, persistence, wake/proxy behavior, and verification for them.
+
 ## What you get
 
 - **Full OpenClaw UI** proxied at `/gateway` with auth and WebSocket rewriting.
 - **Persistent sandboxes.** State is preserved on stop and restored on resume.
 - **Slack, Telegram, WhatsApp (experimental), and Discord (experimental)** channels with durable delivery.
+- **Bundled OpenClaw plugins and skills only.** Arbitrary plugin, skill, ClawHub, MCP, and tool installation is a local/upstream OpenClaw path until a hosted lifecycle contract exists.
 - **Egress firewall.** Learn which domains your agent talks to, then lock it down.
 - **Auto-wake.** A cron watchdog wakes your sandbox when scheduled OpenClaw jobs are due.
 
@@ -232,18 +235,32 @@ pnpm dev                         # http://localhost:3000
 
 ### Running locally against production data
 
-To tweak the admin UI against real prod Redis/metadata without risking accidental mutations:
+For production debugging, prefer a linked local workspace created by `vclaw create --auto-link`. It links the Vercel project under `--dir`, writes the production admin/protection values into that directory's `.env.local`, and makes sure local-only files stay ignored. That keeps the local checkout you inspect, the `.vercel/project.json` link, and the auth values used by admin/debug commands in one place.
 
 ```bash
-vercel env pull .env.local --environment=production
-# then in .env.local:
+npx @vercel/vclaw create \
+  --scope your-team \
+  --auto-project-name \
+  --dir ~/dev/vercel-openclaw \
+  --admin-secret "$ADMIN_SECRET" \
+  --auto-link
+
+cd ~/dev/vercel-openclaw
+# .env.local now contains the admin secret, automation bypass secret, and vclaw project metadata.
+# Keep it local; do not paste it into logs, commits, issues, or agent handoffs.
+```
+
+For read-only UI work against real prod Redis/metadata, edit that `.env.local` before `pnpm dev`:
+
+```bash
+# in .env.local:
 #   VERCEL_ENV=development     # flips the Vercel-deployment gate so Redis connects
 #   LOCAL_READ_ONLY=1          # blocks every admin mutation route with 403 LOCAL_READ_ONLY
 #   unset VERCEL_AUTH_MODE     # use admin-secret auth locally
 pnpm dev
 ```
 
-With `LOCAL_READ_ONLY=1`, `POST /api/admin/stop`, `/ensure`, `/reset`, `/snapshot`, and channel config writes all return `403 { error: "LOCAL_READ_ONLY" }` before touching the sandbox SDK. Reads (`/api/status`, `/api/admin/preflight`, `/api/admin/logs`) still work. Unset the variable when you actually want to test a mutation.
+With `LOCAL_READ_ONLY=1`, `POST /api/admin/stop`, `/ensure`, `/reset`, `/snapshot`, and channel config writes all return `403 { error: "LOCAL_READ_ONLY" }` before touching the sandbox SDK. Reads (`/api/status`, `/api/admin/preflight`, `/api/admin/logs`) still work. Unset the variable only when you intentionally want to test a mutation.
 
 ## Debugging channels with agents
 

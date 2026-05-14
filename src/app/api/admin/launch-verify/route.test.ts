@@ -252,6 +252,11 @@ test("launch-verify POST: preflight failure skips subsequent phases", async () =
     };
     assert.ok(extended.channelReadiness, "should include channelReadiness");
     assert.equal(extended.channelReadiness.ready, false);
+    assert.equal(extended.featureSupport.schemaVersion, 1);
+    assert.equal(
+      extended.featureSupport.entries.find((entry) => entry.id === "channels-upstream-rest")?.hostedStatus,
+      "upstream-only",
+    );
 
     await drainAfterCallbacks();
   });

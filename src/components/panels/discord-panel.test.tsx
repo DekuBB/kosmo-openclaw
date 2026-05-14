@@ -103,6 +103,11 @@ function makeStatus(
         botUsername: null,
         endpointConfigured: false,
         endpointUrl: null,
+        desiredEndpointUrl: "https://openclaw.example/api/channels/discord/webhook",
+        currentEndpointUrl: null,
+        endpointDrift: false,
+        canRepairEndpoint: false,
+        nextSafeAction: "paste-token",
         endpointError: null,
         commandRegistered: false,
         commandId: null,
@@ -247,7 +252,7 @@ const REQUEST_JSON_FAILURE: RequestJson = async () => ({
 
 /* ── Conditional endpoint row when endpointUrl diverges from webhookUrl ── */
 
-test("DiscordPanel absorbs distinct endpoint into health row instead of adding a fourth row", () => {
+test("DiscordPanel absorbs endpoint drift into health row instead of adding a fourth row", () => {
   const html = renderPanel(
     makeStatus({
       configured: true,
@@ -255,6 +260,10 @@ test("DiscordPanel absorbs distinct endpoint into health row instead of adding a
       applicationId: "app-123",
       webhookUrl: "https://openclaw.example/api/channels/discord/webhook",
       endpointUrl: "https://old-deploy.example/api/channels/discord/webhook",
+      currentEndpointUrl: "https://old-deploy.example/api/channels/discord/webhook",
+      desiredEndpointUrl: "https://openclaw.example/api/channels/discord/webhook",
+      endpointDrift: true,
+      canRepairEndpoint: true,
       endpointConfigured: true,
       commandRegistered: false,
       inviteUrl: "https://discord.com/oauth2/authorize?client_id=app-123",
@@ -266,8 +275,28 @@ test("DiscordPanel absorbs distinct endpoint into health row instead of adding a
   const detailRows = html.match(/channel-detail-row/g) ?? [];
   assert.equal(detailRows.length, 3, `expected 3 detail rows even with distinct endpoint (found ${detailRows.length})`);
   assert.ok(!/>Endpoint<\/span>/.test(html), "does not render a separate Endpoint row");
-  assert.ok(html.includes("Custom endpoint configured"), "health row absorbs endpoint status");
-  assert.ok(html.includes("Copy endpoint"), "distinct endpoint remains accessible without adding a row");
+  assert.ok(html.includes("Endpoint drift"), "health row calls out endpoint drift");
+  assert.ok(html.includes("Repair endpoint"), "drift remains repairable without adding a row");
+});
+
+test("DiscordPanel connected card guides operators to run a real ask test", () => {
+  const html = renderPanel(
+    makeStatus({
+      configured: true,
+      appName: "TestBot",
+      applicationId: "app-123",
+      webhookUrl: "https://openclaw.example/api/channels/discord/webhook",
+      endpointUrl: "https://openclaw.example/api/channels/discord/webhook",
+      endpointConfigured: true,
+      commandRegistered: true,
+      inviteUrl: "https://discord.com/oauth2/authorize?client_id=app-123",
+      nextSafeAction: "run-ask-test",
+      connectability: makeConnectability("discord"),
+    }),
+  );
+
+  assert.ok(html.includes("Invite bot"), "invite link is present");
+  assert.ok(html.includes("Run /ask"), "manual proof path is visible");
 });
 
 test("DiscordPanel shows plain endpoint status when endpointUrl matches webhookUrl", () => {

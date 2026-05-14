@@ -1,7 +1,7 @@
 import { authJsonError, authJsonOk, requireJsonRouteAuth } from "@/server/auth/route-auth";
 import { buildSlackManifest } from "@/server/channels/slack/app-definition";
 import { getProjectIdentity } from "@/server/channels/slack/project-identity";
-import { buildPublicUrl } from "@/server/public-url";
+import { buildPublicDisplayUrl } from "@/server/public-url";
 
 export async function GET(request: Request): Promise<Response> {
   const auth = await requireJsonRouteAuth(request);
@@ -10,11 +10,10 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   try {
-    // Include the x-vercel-protection-bypass query parameter so Slack's URL
-    // verification POST can pass through Vercel Deployment Protection. Slack
-    // preserves and re-sends this query param on every subsequent webhook call.
-    // See: https://vercel.com/kb/guide/test-slack-bot-with-vercel-preview-deployment
-    const webhookUrl = buildPublicUrl("/api/channels/slack/webhook", request);
+    // This route returns operator-visible JSON. Keep it display-safe; the
+    // server-side Slack app creation path uses the bypass-capable registration
+    // URL when it calls Slack directly.
+    const webhookUrl = buildPublicDisplayUrl("/api/channels/slack/webhook", request);
     const identity = getProjectIdentity();
     const manifest = buildSlackManifest({ webhookUrl, identity });
     const manifestJson = JSON.stringify(manifest);

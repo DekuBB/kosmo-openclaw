@@ -9,6 +9,7 @@ import {
   type DeploymentContract,
   type DeploymentRequirement,
 } from "@/server/deployment-contract";
+import { probeDeploymentProtection } from "@/server/deployment-protection-probe";
 import { logDebug } from "@/server/log";
 import { getProtectionBypassSecret } from "@/server/public-url";
 import { buildChannelDisplayWebhookUrl } from "@/server/channels/webhook-urls";
@@ -118,6 +119,18 @@ function contractRequirementToIssue(
   };
 }
 
+async function resolveDeploymentProtectionDetected(
+  request: Request,
+  shared: SharedConnectabilityInputs,
+): Promise<boolean> {
+  if (typeof shared.deploymentProtectionDetected === "boolean") {
+    return shared.deploymentProtectionDetected;
+  }
+
+  const result = await probeDeploymentProtection(request);
+  return result.status === "detected";
+}
+
 /**
  * Contract requirements that affect determinism or benchmarking but do not
  * prevent channels from functioning. These are excluded from channel
@@ -165,6 +178,10 @@ export async function buildChannelPrerequisite(
   const def = CHANNEL_DEFINITIONS[channel];
   const label = def.label;
   const contract = shared.contract ?? await buildDeploymentContract({ request });
+  const deploymentProtectionDetected = await resolveDeploymentProtectionDetected(
+    request,
+    shared,
+  );
 
   // Webhook-proxied channels: contract + webhook URL checks.
   const issues: ChannelConnectabilityIssue[] = collectContractIssues(
@@ -176,7 +193,7 @@ export async function buildChannelPrerequisite(
   // and no working bypass is configured, channel webhooks cannot reach the
   // app. This is a hard blocker — distinct from the heuristic
   // "webhook-bypass" check which stays non-blocking.
-  if (shared.deploymentProtectionDetected && !getProtectionBypassSecret()) {
+  if (deploymentProtectionDetected && !getProtectionBypassSecret()) {
     addIssue(issues, {
       id: "deployment-protection-active",
       status: "fail",
@@ -258,6 +275,9 @@ export async function buildChannelConnectabilityMap(
   const nextShared: SharedConnectabilityInputs = {
     ...options.shared,
     contract,
+    deploymentProtectionDetected:
+      options.shared?.deploymentProtectionDetected ??
+      (await resolveDeploymentProtectionDetected(request, options.shared ?? {})),
   };
 
   const results = await Promise.all(

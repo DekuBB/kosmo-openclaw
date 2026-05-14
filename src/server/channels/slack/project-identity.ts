@@ -106,8 +106,8 @@ export function buildDisplayName(
 
 /**
  * Slack's bot_user.display_name only allows [a-z0-9-_.]. When an
- * operator supplies an app-name override, reuse a Slack-safe version for the
- * bot display name too; otherwise derive it from the project identity.
+ * operator supplies a bot-name override, use it. Otherwise fall back to a
+ * Slack-safe version of the app-name override, then the project identity.
  */
 function sanitizeBotDisplayNameOverride(override: string | undefined): string {
   if (!override || override.trim().length === 0) return "";
@@ -121,11 +121,13 @@ function sanitizeBotDisplayNameOverride(override: string | undefined): string {
 
 export function buildBotDisplayName(
   identity: ProjectIdentity,
-  override?: string,
+  appNameOverride?: string,
+  botNameOverride?: string,
 ): string {
-  const explicit = sanitizeBotDisplayNameOverride(override);
+  const explicitBotName = sanitizeBotDisplayNameOverride(botNameOverride);
+  const explicitAppName = sanitizeBotDisplayNameOverride(appNameOverride);
   return truncate(
-    explicit || `${identity.name}.${identity.scope}`,
+    explicitBotName || explicitAppName || `${identity.name}.${identity.scope}`,
     BOT_DISPLAY_NAME_MAX,
   );
 }

@@ -18,6 +18,7 @@ export type DiscordReconcileResult = {
   desiredUrl: string;
   currentUrl: string | null;
   endpointPatched: boolean;
+  endpointDrift: boolean;
   commandRegistered: boolean;
 };
 
@@ -25,6 +26,7 @@ export async function reconcileDiscordIntegration(options: {
   request?: Request;
   force?: boolean;
   ensureCommand?: boolean;
+  forceOverwriteEndpoint?: boolean;
 } = {}): Promise<DiscordReconcileResult | null> {
   const meta = await getInitializedMeta();
   const config = meta.channels.discord;
@@ -51,6 +53,36 @@ export async function reconcileDiscordIntegration(options: {
 
     const currentUrl = identity.currentInteractionsEndpointUrl ?? null;
     let endpointPatched = false;
+    const endpointDrift = Boolean(currentUrl && currentUrl !== desiredUrl);
+    if (endpointDrift && options.forceOverwriteEndpoint !== true) {
+      const checkedAt = Date.now();
+      await setDiscordChannelConfig({
+        ...config,
+        applicationId: identity.applicationId,
+        publicKey: identity.publicKey,
+        appName: identity.appName,
+        botUsername: identity.botUsername,
+        endpointConfigured: false,
+        endpointUrl: currentUrl ?? undefined,
+        endpointError:
+          "Discord interactions endpoint points at a different deployment. Use explicit endpoint repair to overwrite it.",
+      });
+      await getStore().setValue(discordReconcileKey(), checkedAt);
+      logWarn("channels.discord_endpoint_drift_detected", {
+        desiredUrl,
+        currentUrl,
+        endpointPatched: false,
+      });
+      return {
+        checkedAt,
+        desiredUrl,
+        currentUrl,
+        endpointPatched: false,
+        endpointDrift: true,
+        commandRegistered: config.commandRegistered === true,
+      };
+    }
+
     if (currentUrl !== desiredUrl) {
       await patchInteractionsEndpoint(config.botToken, desiredUrl);
       endpointPatched = true;
@@ -91,6 +123,7 @@ export async function reconcileDiscordIntegration(options: {
       desiredUrl,
       currentUrl,
       endpointPatched,
+      endpointDrift: false,
       commandRegistered,
     });
 
@@ -99,6 +132,7 @@ export async function reconcileDiscordIntegration(options: {
       desiredUrl,
       currentUrl,
       endpointPatched,
+      endpointDrift: false,
       commandRegistered,
     };
   } catch (error) {

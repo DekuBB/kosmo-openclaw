@@ -185,18 +185,34 @@ export async function POST(request: Request): Promise<Response> {
   const meta = await getInitializedMeta();
   const config = meta.channels.telegram;
   if (!config) {
+    logWarn("channels.telegram_webhook_rejected", {
+      reason: "telegram_not_configured",
+      requestId,
+    });
     return Response.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
   }
 
   const secretHeader = request.headers.get("x-telegram-bot-api-secret-token") ?? "";
   if (!secretHeader || !isTelegramWebhookSecretValid(config, secretHeader)) {
+    logWarn("channels.telegram_webhook_rejected", {
+      reason: "missing_or_invalid_secret",
+      requestId,
+      hasSecretHeader: secretHeader.length > 0,
+    });
     return Response.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
   }
 
+  const rawBody = await request.text().catch(() => "");
   let payload: unknown;
   try {
-    payload = await request.json();
+    payload = rawBody.length > 0 ? JSON.parse(rawBody) : null;
   } catch {
+    logWarn("channels.telegram_webhook_rejected", {
+      reason: "invalid_json",
+      requestId,
+      bodyLength: rawBody.length,
+      bodyHead: rawBody.slice(0, 100),
+    });
     return Response.json({ ok: true });
   }
 
@@ -218,6 +234,11 @@ export async function POST(request: Request): Promise<Response> {
         dedupId: updateId,
       });
       if (dedupResult.kind === "duplicate") {
+        logInfo("channels.telegram_webhook_dedup_skip", {
+          requestId,
+          updateId,
+          dedupKey,
+        });
         return Response.json({ ok: true });
       }
       if (dedupResult.kind === "acquired") {

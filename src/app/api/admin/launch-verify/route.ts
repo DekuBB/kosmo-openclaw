@@ -56,6 +56,7 @@ import {
   type LaunchVerifyCompletionLog,
   type RestorePreparedPhaseResolutionCode,
 } from "@/shared/launch-verification";
+import { getHostedFeatureSupportMatrix } from "@/shared/hosted-feature-support";
 
 const ENSURE_POLL_MS = 2_000;
 const ENSURE_TIMEOUT_MS = 120_000;
@@ -606,6 +607,7 @@ function buildStreamingResponse(
         const payload: LaunchVerificationPayload = {
           ok: false, mode, startedAt,
           completedAt: new Date().toISOString(), phases,
+          featureSupport: getHostedFeatureSupportMatrix(),
           diagnostics,
         };
         const readiness = await writeChannelReadiness(payload);
@@ -780,7 +782,7 @@ function buildStreamingResponse(
       const payload: LaunchVerificationPayload = {
         ok, mode, startedAt,
         completedAt: new Date().toISOString(),
-        phases, diagnostics, runtime, sandboxHealth,
+        phases, featureSupport: getHostedFeatureSupportMatrix(), diagnostics, runtime, sandboxHealth,
       };
       const readiness = await writeChannelReadiness(payload);
 
@@ -824,6 +826,7 @@ async function buildJsonResponse(
     const payload: LaunchVerificationPayload = {
       ok: false, mode, startedAt,
       completedAt: new Date().toISOString(), phases,
+      featureSupport: getHostedFeatureSupportMatrix(),
       diagnostics,
     };
     const readiness = await writeChannelReadiness(payload);
@@ -972,7 +975,7 @@ async function buildJsonResponse(
   const payload: LaunchVerificationPayload = {
     ok, mode, startedAt,
     completedAt: new Date().toISOString(),
-    phases, diagnostics, runtime, sandboxHealth,
+    phases, featureSupport: getHostedFeatureSupportMatrix(), diagnostics, runtime, sandboxHealth,
   };
   const readiness = await writeChannelReadiness(payload);
 

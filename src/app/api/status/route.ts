@@ -23,6 +23,7 @@ import { getStore, getInitializedMeta, mutateMeta } from "@/server/store/store";
 import { jsonError } from "@/shared/http";
 import type { SingleMeta } from "@/shared/types";
 import { GATEWAY_CHAT_PATH } from "@/shared/gateway-paths";
+import { getHostedFeatureSupportMatrix } from "@/shared/hosted-feature-support";
 
 type GatewayStatus = "ready" | "not-ready" | "unknown";
 
@@ -165,6 +166,7 @@ export async function GET(request: Request): Promise<Response> {
         wouldBlock: computeWouldBlock(responseMeta.firewall),
       },
       channels: await getPublicChannelState(request, responseMeta),
+      featureSupport: getHostedFeatureSupportMatrix(),
       restoreTarget: {
         restorePreparedStatus: responseMeta.restorePreparedStatus,
         restorePreparedReason: responseMeta.restorePreparedReason,

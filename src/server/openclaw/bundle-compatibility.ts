@@ -22,6 +22,12 @@ export const REQUIRED_BUNDLE_METADATA_ASSETS = [
   "checksums.sha256",
 ] as const;
 
+export const REQUIRED_MANIFEST_RECORDED_ASSETS = [
+  ...REQUIRED_DASHBOARD_BUNDLE_ASSETS,
+  "bundle-contract.json",
+  "release.json",
+] as const;
+
 export const OPTIONAL_DASHBOARD_BUNDLE_ASSETS = ["channel-shared-chunks.tar.gz"] as const;
 
 export type BundleCompatibilityIssue = {
@@ -74,11 +80,7 @@ export function validateBundleAssetManifestForDashboard(
     return { ok: false, issue: issue("assets-missing", "asset-manifest.json lacks assets"), warnings };
   }
 
-  const requiredAssets = [
-    ...REQUIRED_DASHBOARD_BUNDLE_ASSETS,
-    ...REQUIRED_BUNDLE_METADATA_ASSETS,
-  ];
-  for (const assetName of requiredAssets) {
+  for (const assetName of REQUIRED_MANIFEST_RECORDED_ASSETS) {
     const record = manifest.assets[assetName];
     if (!isRecord(record)) {
       return {

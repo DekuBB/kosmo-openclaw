@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, beforeEach, test } from "node:test";
 
 import {
   buildChannelConnectability,
@@ -13,6 +13,10 @@ import {
   buildChannelWebhookUrl,
 } from "@/server/channels/webhook-urls";
 import { buildDeploymentContract } from "@/server/deployment-contract";
+import {
+  _resetProbeForTesting,
+  _setProbeResultForTesting,
+} from "@/server/deployment-protection-probe";
 import { _setAiGatewayTokenOverrideForTesting } from "@/server/env";
 
 const ORIGINAL_ENV = { ...process.env };
@@ -46,9 +50,14 @@ function makeRequest(origin: string): Request {
   });
 }
 
+beforeEach(() => {
+  _setProbeResultForTesting({ status: "skipped", probeError: null });
+});
+
 afterEach(() => {
   resetEnv();
   _setAiGatewayTokenOverrideForTesting(null);
+  _resetProbeForTesting();
 });
 
 test("fails when the webhook url is not public https", async () => {
@@ -102,6 +111,55 @@ test("passes with public origin, bypass, durable store, and OIDC", async () => {
   assert.equal(result.canConnect, true);
   assert.equal(result.status, "pass");
   assert.equal(result.issues.length, 0);
+});
+
+test("fails when deployment protection is active and bypass secret is missing", async () => {
+  process.env.VERCEL = "1";
+  process.env.VERCEL_AUTH_MODE = "admin-secret";
+  process.env.NEXT_PUBLIC_APP_URL = PUBLIC_ORIGIN;
+  process.env.REDIS_URL = "redis://default:token@example.com:6379";
+  process.env.OPENCLAW_PACKAGE_SPEC = "openclaw@1.0.0";
+  process.env.CRON_SECRET = "test-cron-secret";
+  delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  delete process.env.AI_GATEWAY_API_KEY;
+  _setAiGatewayTokenOverrideForTesting("oidc-token");
+  _setProbeResultForTesting({ status: "detected", probeError: null });
+
+  const result = await buildChannelConnectability(
+    "slack",
+    makeRequest(PUBLIC_ORIGIN),
+  );
+
+  assert.equal(result.canConnect, false);
+  assert.equal(result.status, "fail");
+  const issue = result.issues.find((i) => i.id === "deployment-protection-active");
+  assert.ok(issue, "expected deployment-protection-active issue");
+  assert.equal(issue.status, "fail");
+  assert.deepEqual(issue.env, ["VERCEL_AUTOMATION_BYPASS_SECRET"]);
+});
+
+test("passes when deployment protection probe is clear and bypass secret is missing", async () => {
+  process.env.VERCEL = "1";
+  process.env.VERCEL_AUTH_MODE = "admin-secret";
+  process.env.NEXT_PUBLIC_APP_URL = PUBLIC_ORIGIN;
+  process.env.REDIS_URL = "redis://default:token@example.com:6379";
+  process.env.OPENCLAW_PACKAGE_SPEC = "openclaw@1.0.0";
+  process.env.CRON_SECRET = "test-cron-secret";
+  delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  delete process.env.AI_GATEWAY_API_KEY;
+  _setAiGatewayTokenOverrideForTesting("oidc-token");
+  _setProbeResultForTesting({ status: "clear", probeError: null });
+
+  const result = await buildChannelConnectability(
+    "telegram",
+    makeRequest(PUBLIC_ORIGIN),
+  );
+
+  assert.equal(result.canConnect, true);
+  assert.equal(
+    result.issues.find((i) => i.id === "deployment-protection-active"),
+    undefined,
+  );
 });
 
 test("does not warn about missing CRON_SECRET", async () => {

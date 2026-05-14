@@ -26,6 +26,9 @@ const SLACK_PROCESSING_PLACEHOLDER_TEXT = "_Thinking..._";
 const SLACK_FALLBACK_IMAGE_TEXT = "Sent an image.";
 const SLACK_DEFAULT_IMAGE_ALT_TEXT = "Image from OpenClaw";
 const SLACK_MAX_BLOCK_IMAGES = 5;
+const SLACK_UPLOAD_ATTEMPTS = 3;
+const SLACK_UPLOAD_RETRY_BASE_MS = 250;
+const SLACK_UPLOAD_RETRY_MAX_DELAY_MS = 2_000;
 
 type SlackConfig = {
   signingSecret: string;
@@ -175,6 +178,53 @@ function parseRetryAfterSeconds(retryAfterHeader: string | null): number | undef
   return numeric;
 }
 
+function slackUploadRetryDelayMs(attempt: number, retryAfterSeconds?: number): number {
+  if (retryAfterSeconds && retryAfterSeconds <= 2) {
+    return retryAfterSeconds * 1000;
+  }
+  return Math.min(
+    SLACK_UPLOAD_RETRY_BASE_MS * 2 ** (attempt - 1),
+    SLACK_UPLOAD_RETRY_MAX_DELAY_MS,
+  );
+}
+
+async function sleepSlackUploadRetry(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableUploadError(error: unknown): error is RetryableSendError {
+  return error instanceof RetryableSendError || isLikelyNetworkError(error);
+}
+
+async function withSlackUploadRetry<T>(
+  label: string,
+  operation: (attempt: number) => Promise<T>,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= SLACK_UPLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      return await operation(attempt);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableUploadError(error) || attempt >= SLACK_UPLOAD_ATTEMPTS) {
+        throw error;
+      }
+
+      const retryAfterSeconds =
+        error instanceof RetryableSendError ? error.retryAfterSeconds : undefined;
+      const delayMs = slackUploadRetryDelayMs(attempt, retryAfterSeconds);
+      logWarn("channels.slack_upload_retry", {
+        label,
+        attempt,
+        nextAttempt: attempt + 1,
+        delayMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sleepSlackUploadRetry(delayMs);
+    }
+  }
+  throw lastError;
+}
 function isSlackProcessingPlaceholder(
   reply: Pick<SlackThreadReply, "text" | "bot_id">,
 ): boolean {
@@ -765,168 +815,192 @@ function decodeReplyImageData(
   };
 }
 
+async function uploadSlackDecodedData(params: {
+  botToken: string;
+  message: SlackExtractedMessage;
+  decoded: SlackDecodedBinaryData & { altText?: string };
+  fetchFn?: typeof fetch;
+  logMessage: string;
+  logData?: Record<string, unknown>;
+}): Promise<void> {
+  const runFetch = params.fetchFn ?? globalThis.fetch;
+  const { decoded, message, botToken } = params;
+
+  const { fileId } = await withSlackUploadRetry("rich-media-get-url-and-transfer", async () => {
+    let getUploadResponse: Response;
+    try {
+      getUploadResponse = await runFetch(SLACK_FILES_GET_UPLOAD_URL_EXTERNAL_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${botToken}`,
+        },
+        body: JSON.stringify({
+          filename: decoded.filename,
+          length: decoded.bytes.length,
+          ...(decoded.altText ? { alt_txt: decoded.altText } : {}),
+        }),
+        signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      if (isLikelyNetworkError(error)) {
+        throw toRetryableSendError(
+          `slack_upload_prepare_network: ${error instanceof Error ? error.message : String(error)}`,
+          undefined,
+          error,
+        );
+      }
+      throw error;
+    }
+
+    let getUploadJson: SlackFilesGetUploadURLExternalResponse | null = null;
+    try {
+      getUploadJson = (await getUploadResponse.json()) as SlackFilesGetUploadURLExternalResponse;
+    } catch {
+      getUploadJson = null;
+    }
+
+    const getUploadErrorCode =
+      typeof getUploadJson?.error === "string" ? getUploadJson.error : null;
+    const getUploadFailureMessage = `slack_upload_prepare_failed: status=${getUploadResponse.status}${
+      getUploadErrorCode ? ` error=${getUploadErrorCode}` : ""
+    }`;
+    const getUploadRetryAfterSeconds = parseRetryAfterSeconds(
+      getUploadResponse.headers.get("retry-after"),
+    );
+
+    if (getUploadResponse.status === 429 || getUploadResponse.status >= 500) {
+      throw toRetryableSendError(getUploadFailureMessage, getUploadRetryAfterSeconds);
+    }
+
+    if (!getUploadResponse.ok || getUploadJson?.ok !== true) {
+      throw new Error(getUploadFailureMessage);
+    }
+
+    const uploadUrl = toNonEmptyString(getUploadJson?.upload_url);
+    const fileId = toNonEmptyString(getUploadJson?.file_id);
+    if (!uploadUrl || !fileId) {
+      throw new Error("slack_upload_prepare_failed: missing upload_url or file_id");
+    }
+
+    const formData = new FormData();
+    formData.set("filename", decoded.filename);
+    formData.set("length", String(decoded.bytes.length));
+    formData.set(
+      "file",
+      new Blob([Uint8Array.from(decoded.bytes)], { type: decoded.mimeType }),
+      decoded.filename,
+    );
+
+    let uploadResponse: Response;
+    try {
+      uploadResponse = await runFetch(uploadUrl, {
+        method: "POST",
+        body: formData,
+        signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      if (isLikelyNetworkError(error)) {
+        throw toRetryableSendError(
+          `slack_upload_transfer_network: ${error instanceof Error ? error.message : String(error)}`,
+          undefined,
+          error,
+        );
+      }
+      throw error;
+    }
+
+    const uploadFailureMessage = `slack_upload_transfer_failed: status=${uploadResponse.status}`;
+    const uploadRetryAfterSeconds = parseRetryAfterSeconds(
+      uploadResponse.headers.get("retry-after"),
+    );
+    if (uploadResponse.status === 429 || uploadResponse.status >= 500) {
+      throw toRetryableSendError(uploadFailureMessage, uploadRetryAfterSeconds);
+    }
+
+    if (!uploadResponse.ok) {
+      throw new Error(uploadFailureMessage);
+    }
+
+    return { fileId };
+  });
+
+  await withSlackUploadRetry("rich-media-complete", async () => {
+    let completeUploadResponse: Response;
+    try {
+      completeUploadResponse = await runFetch(SLACK_FILES_COMPLETE_UPLOAD_EXTERNAL_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${botToken}`,
+        },
+        body: JSON.stringify({
+          files: [{ id: fileId, title: decoded.filename }],
+          channel_id: message.channel,
+          thread_ts: message.threadTs,
+        }),
+        signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      if (isLikelyNetworkError(error)) {
+        throw toRetryableSendError(
+          `slack_upload_complete_network: ${error instanceof Error ? error.message : String(error)}`,
+          undefined,
+          error,
+        );
+      }
+      throw error;
+    }
+
+    let completeUploadJson: SlackSendResponse | null = null;
+    try {
+      completeUploadJson = (await completeUploadResponse.json()) as SlackSendResponse;
+    } catch {
+      completeUploadJson = null;
+    }
+
+    const completeUploadErrorCode =
+      typeof completeUploadJson?.error === "string" ? completeUploadJson.error : null;
+    const completeUploadFailureMessage = `slack_upload_complete_failed: status=${completeUploadResponse.status}${
+      completeUploadErrorCode ? ` error=${completeUploadErrorCode}` : ""
+    }`;
+    const completeUploadRetryAfterSeconds = parseRetryAfterSeconds(
+      completeUploadResponse.headers.get("retry-after"),
+    );
+
+    if (completeUploadResponse.status === 429 || completeUploadResponse.status >= 500) {
+      throw toRetryableSendError(completeUploadFailureMessage, completeUploadRetryAfterSeconds);
+    }
+
+    if (!completeUploadResponse.ok || completeUploadJson?.ok !== true) {
+      throw new Error(completeUploadFailureMessage);
+    }
+  });
+
+  logInfo(params.logMessage, {
+    channel: message.channel,
+    threadTs: message.threadTs,
+    filename: decoded.filename,
+    fileId,
+    ...(params.logData ?? {}),
+  });
+}
+
 async function uploadSlackImageData(
   botToken: string,
   message: SlackExtractedMessage,
   image: Extract<NonNullable<ChannelReply["images"]>[number], { kind: "data" }>,
   fetchFn?: typeof fetch,
 ): Promise<void> {
-  const runFetch = fetchFn ?? globalThis.fetch;
   const decoded = decodeReplyImageData(image);
-
-  // Step 1: Get upload URL
-  let getUploadResponse: Response;
-  try {
-    getUploadResponse = await runFetch(SLACK_FILES_GET_UPLOAD_URL_EXTERNAL_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${botToken}`,
-      },
-      body: JSON.stringify({
-        filename: decoded.filename,
-        length: decoded.bytes.length,
-        alt_txt: decoded.altText,
-      }),
-      signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    if (isLikelyNetworkError(error)) {
-      throw toRetryableSendError(
-        `slack_upload_prepare_network: ${error instanceof Error ? error.message : String(error)}`,
-        undefined,
-        error,
-      );
-    }
-    throw error;
-  }
-
-  let getUploadJson: SlackFilesGetUploadURLExternalResponse | null = null;
-  try {
-    getUploadJson = (await getUploadResponse.json()) as SlackFilesGetUploadURLExternalResponse;
-  } catch {
-    getUploadJson = null;
-  }
-
-  const getUploadErrorCode = typeof getUploadJson?.error === "string" ? getUploadJson.error : null;
-  const getUploadFailureMessage = `slack_upload_prepare_failed: status=${getUploadResponse.status}${
-    getUploadErrorCode ? ` error=${getUploadErrorCode}` : ""
-  }`;
-  const getUploadRetryAfterSeconds = parseRetryAfterSeconds(
-    getUploadResponse.headers.get("retry-after"),
-  );
-
-  if (getUploadResponse.status === 429 || getUploadResponse.status >= 500) {
-    throw toRetryableSendError(getUploadFailureMessage, getUploadRetryAfterSeconds);
-  }
-
-  if (!getUploadResponse.ok || getUploadJson?.ok !== true) {
-    throw new Error(getUploadFailureMessage);
-  }
-
-  const uploadUrl = toNonEmptyString(getUploadJson?.upload_url);
-  const fileId = toNonEmptyString(getUploadJson?.file_id);
-  if (!uploadUrl || !fileId) {
-    throw new Error("slack_upload_prepare_failed: missing upload_url or file_id");
-  }
-
-  // Step 2: Upload file bytes
-  const formData = new FormData();
-  formData.set("filename", decoded.filename);
-  formData.set("length", String(decoded.bytes.length));
-  formData.set(
-    "file",
-    new Blob([Uint8Array.from(decoded.bytes)], { type: decoded.mimeType }),
-    decoded.filename,
-  );
-
-  let uploadResponse: Response;
-  try {
-    uploadResponse = await runFetch(uploadUrl, {
-      method: "POST",
-      body: formData,
-      signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    if (isLikelyNetworkError(error)) {
-      throw toRetryableSendError(
-        `slack_upload_transfer_network: ${error instanceof Error ? error.message : String(error)}`,
-        undefined,
-        error,
-      );
-    }
-    throw error;
-  }
-
-  const uploadFailureMessage = `slack_upload_transfer_failed: status=${uploadResponse.status}`;
-  const uploadRetryAfterSeconds = parseRetryAfterSeconds(uploadResponse.headers.get("retry-after"));
-  if (uploadResponse.status === 429 || uploadResponse.status >= 500) {
-    throw toRetryableSendError(uploadFailureMessage, uploadRetryAfterSeconds);
-  }
-
-  if (!uploadResponse.ok) {
-    throw new Error(uploadFailureMessage);
-  }
-
-  // Step 3: Complete upload and attach to thread
-  let completeUploadResponse: Response;
-  try {
-    completeUploadResponse = await runFetch(SLACK_FILES_COMPLETE_UPLOAD_EXTERNAL_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${botToken}`,
-      },
-      body: JSON.stringify({
-        files: [{ id: fileId, title: decoded.filename }],
-        channel_id: message.channel,
-        thread_ts: message.threadTs,
-      }),
-      signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    if (isLikelyNetworkError(error)) {
-      throw toRetryableSendError(
-        `slack_upload_complete_network: ${error instanceof Error ? error.message : String(error)}`,
-        undefined,
-        error,
-      );
-    }
-    throw error;
-  }
-
-  let completeUploadJson: SlackSendResponse | null = null;
-  try {
-    completeUploadJson = (await completeUploadResponse.json()) as SlackSendResponse;
-  } catch {
-    completeUploadJson = null;
-  }
-
-  const completeUploadErrorCode =
-    typeof completeUploadJson?.error === "string" ? completeUploadJson.error : null;
-  const completeUploadFailureMessage = `slack_upload_complete_failed: status=${completeUploadResponse.status}${
-    completeUploadErrorCode ? ` error=${completeUploadErrorCode}` : ""
-  }`;
-  const completeUploadRetryAfterSeconds = parseRetryAfterSeconds(
-    completeUploadResponse.headers.get("retry-after"),
-  );
-
-  if (completeUploadResponse.status === 429 || completeUploadResponse.status >= 500) {
-    throw toRetryableSendError(completeUploadFailureMessage, completeUploadRetryAfterSeconds);
-  }
-
-  if (!completeUploadResponse.ok || completeUploadJson?.ok !== true) {
-    throw new Error(completeUploadFailureMessage);
-  }
-
-  logInfo("channels.slack_image_uploaded", {
-    channel: message.channel,
-    threadTs: message.threadTs,
-    filename: decoded.filename,
-    fileId,
+  await uploadSlackDecodedData({
+    botToken,
+    message,
+    decoded,
+    fetchFn,
+    logMessage: "channels.slack_image_uploaded",
   });
 }
-
 function inferFileExtension(mimeType: string): string {
   const normalized = mimeType.toLowerCase();
   if (normalized === "audio/mpeg") return "mp3";
@@ -1035,159 +1109,13 @@ async function uploadSlackBinaryData(
   decoded: SlackDecodedBinaryData,
   fetchFn?: typeof fetch,
 ): Promise<void> {
-  const runFetch = fetchFn ?? globalThis.fetch;
-
-  // Step 1: Get upload URL
-  let getUploadResponse: Response;
-  try {
-    getUploadResponse = await runFetch(SLACK_FILES_GET_UPLOAD_URL_EXTERNAL_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${botToken}`,
-      },
-      body: JSON.stringify({
-        filename: decoded.filename,
-        length: decoded.bytes.length,
-        ...(decoded.altText ? { alt_txt: decoded.altText } : {}),
-      }),
-      signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    if (isLikelyNetworkError(error)) {
-      throw toRetryableSendError(
-        `slack_upload_prepare_network: ${error instanceof Error ? error.message : String(error)}`,
-        undefined,
-        error,
-      );
-    }
-    throw error;
-  }
-
-  let getUploadJson: SlackFilesGetUploadURLExternalResponse | null = null;
-  try {
-    getUploadJson = (await getUploadResponse.json()) as SlackFilesGetUploadURLExternalResponse;
-  } catch {
-    getUploadJson = null;
-  }
-
-  const getUploadErrorCode = typeof getUploadJson?.error === "string" ? getUploadJson.error : null;
-  const getUploadFailureMessage = `slack_upload_prepare_failed: status=${getUploadResponse.status}${
-    getUploadErrorCode ? ` error=${getUploadErrorCode}` : ""
-  }`;
-  const getUploadRetryAfterSeconds = parseRetryAfterSeconds(
-    getUploadResponse.headers.get("retry-after"),
-  );
-
-  if (getUploadResponse.status === 429 || getUploadResponse.status >= 500) {
-    throw toRetryableSendError(getUploadFailureMessage, getUploadRetryAfterSeconds);
-  }
-
-  if (!getUploadResponse.ok || getUploadJson?.ok !== true) {
-    throw new Error(getUploadFailureMessage);
-  }
-
-  const uploadUrl = toNonEmptyString(getUploadJson?.upload_url);
-  const fileId = toNonEmptyString(getUploadJson?.file_id);
-  if (!uploadUrl || !fileId) {
-    throw new Error("slack_upload_prepare_failed: missing upload_url or file_id");
-  }
-
-  // Step 2: Upload file bytes
-  const formData = new FormData();
-  formData.set("filename", decoded.filename);
-  formData.set("length", String(decoded.bytes.length));
-  formData.set(
-    "file",
-    new Blob([Uint8Array.from(decoded.bytes)], { type: decoded.mimeType }),
-    decoded.filename,
-  );
-
-  let uploadResponse: Response;
-  try {
-    uploadResponse = await runFetch(uploadUrl, {
-      method: "POST",
-      body: formData,
-      signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    if (isLikelyNetworkError(error)) {
-      throw toRetryableSendError(
-        `slack_upload_transfer_network: ${error instanceof Error ? error.message : String(error)}`,
-        undefined,
-        error,
-      );
-    }
-    throw error;
-  }
-
-  const uploadFailureMessage = `slack_upload_transfer_failed: status=${uploadResponse.status}`;
-  const uploadRetryAfterSeconds = parseRetryAfterSeconds(uploadResponse.headers.get("retry-after"));
-  if (uploadResponse.status === 429 || uploadResponse.status >= 500) {
-    throw toRetryableSendError(uploadFailureMessage, uploadRetryAfterSeconds);
-  }
-
-  if (!uploadResponse.ok) {
-    throw new Error(uploadFailureMessage);
-  }
-
-  // Step 3: Complete upload and attach to thread
-  let completeUploadResponse: Response;
-  try {
-    completeUploadResponse = await runFetch(SLACK_FILES_COMPLETE_UPLOAD_EXTERNAL_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${botToken}`,
-      },
-      body: JSON.stringify({
-        files: [{ id: fileId, title: decoded.filename }],
-        channel_id: message.channel,
-        thread_ts: message.threadTs,
-      }),
-      signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    if (isLikelyNetworkError(error)) {
-      throw toRetryableSendError(
-        `slack_upload_complete_network: ${error instanceof Error ? error.message : String(error)}`,
-        undefined,
-        error,
-      );
-    }
-    throw error;
-  }
-
-  let completeUploadJson: SlackSendResponse | null = null;
-  try {
-    completeUploadJson = (await completeUploadResponse.json()) as SlackSendResponse;
-  } catch {
-    completeUploadJson = null;
-  }
-
-  const completeUploadErrorCode =
-    typeof completeUploadJson?.error === "string" ? completeUploadJson.error : null;
-  const completeUploadFailureMessage = `slack_upload_complete_failed: status=${completeUploadResponse.status}${
-    completeUploadErrorCode ? ` error=${completeUploadErrorCode}` : ""
-  }`;
-  const completeUploadRetryAfterSeconds = parseRetryAfterSeconds(
-    completeUploadResponse.headers.get("retry-after"),
-  );
-
-  if (completeUploadResponse.status === 429 || completeUploadResponse.status >= 500) {
-    throw toRetryableSendError(completeUploadFailureMessage, completeUploadRetryAfterSeconds);
-  }
-
-  if (!completeUploadResponse.ok || completeUploadJson?.ok !== true) {
-    throw new Error(completeUploadFailureMessage);
-  }
-
-  logInfo("channels.slack_file_uploaded", {
-    channel: message.channel,
-    threadTs: message.threadTs,
-    filename: decoded.filename,
-    fileId,
-    mediaType: "binary",
+  await uploadSlackDecodedData({
+    botToken,
+    message,
+    decoded,
+    fetchFn,
+    logMessage: "channels.slack_file_uploaded",
+    logData: { mediaType: "binary" },
   });
 }
 
@@ -1264,7 +1192,6 @@ export function createSlackAdapter(
 
     async sendReply(message, replyText) {
       const placeholderTs = message.processingPlaceholderTs;
-
       if (placeholderTs) {
         try {
           await updateProcessingPlaceholder(
@@ -1332,6 +1259,25 @@ export function createSlackAdapter(
       }
 
       const placeholderTs = message.processingPlaceholderTs;
+      const uploadAllMedia = async () => {
+        for (const image of imageUploads) {
+          await uploadSlackImageData(
+            config.botToken,
+            message,
+            {
+              kind: "data",
+              mimeType: image.source.mimeType,
+              base64: image.source.base64,
+              ...(image.source.filename ? { filename: image.source.filename } : {}),
+              ...(image.altText ? { alt: image.altText } : {}),
+            },
+            fetchFn,
+          );
+        }
+        for (const file of mediaFiles) {
+          await uploadSlackBinaryData(config.botToken, message, file, fetchFn);
+        }
+      };
 
       if (placeholderTs) {
         try {
@@ -1342,27 +1288,8 @@ export function createSlackAdapter(
             slackPayload,
             fetchFn,
           );
+          await uploadAllMedia();
           message.processingPlaceholderTs = undefined;
-
-          // Upload legacy data images (backward compat)
-          for (const image of imageUploads) {
-            await uploadSlackImageData(
-              config.botToken,
-              message,
-              {
-                kind: "data",
-                mimeType: image.source.mimeType,
-                base64: image.source.base64,
-                ...(image.source.filename ? { filename: image.source.filename } : {}),
-                ...(image.altText ? { alt: image.altText } : {}),
-              },
-              fetchFn,
-            );
-          }
-          // Upload generic media files
-          for (const file of mediaFiles) {
-            await uploadSlackBinaryData(config.botToken, message, file, fetchFn);
-          }
           return;
         } catch (error) {
           if (!canFallbackFromPlaceholderUpdateError(error)) {
@@ -1379,26 +1306,7 @@ export function createSlackAdapter(
       }
 
       await postSlackReply(config.botToken, message, slackPayload, fetchFn);
-
-      // Upload legacy data images (backward compat)
-      for (const image of imageUploads) {
-        await uploadSlackImageData(
-          config.botToken,
-          message,
-          {
-            kind: "data",
-            mimeType: image.source.mimeType,
-            base64: image.source.base64,
-            ...(image.source.filename ? { filename: image.source.filename } : {}),
-            ...(image.altText ? { alt: image.altText } : {}),
-          },
-          fetchFn,
-        );
-      }
-      // Upload generic media files
-      for (const file of mediaFiles) {
-        await uploadSlackBinaryData(config.botToken, message, file, fetchFn);
-      }
+      await uploadAllMedia();
 
       if (placeholderTs) {
         try {

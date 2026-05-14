@@ -71,18 +71,19 @@ export type SlackManifestUrls = {
    *  workspace. */
   identity: ProjectIdentity;
   /** Optional operator-supplied override for display_information.name.
-   *  Also drives a Slack-safe bot_user.display_name so the installed bot
-   *  matches the operator-facing app name. Slash command stays project-derived
-   *  to keep routing unambiguous. */
+   *  Used as the bot display-name fallback when botName is omitted. */
   appName?: string;
+  /** Optional operator-supplied override for bot_user.display_name.
+   *  Slash command stays project-derived to keep routing unambiguous. */
+  botName?: string;
 };
 
 export function buildSlackManifest(
   urls: SlackManifestUrls,
 ): Record<string, unknown> {
-  const { webhookUrl, redirectUrl, identity, appName } = urls;
+  const { webhookUrl, redirectUrl, identity, appName, botName } = urls;
   const displayName = buildDisplayName(identity, appName);
-  const botDisplayName = buildBotDisplayName(identity, appName);
+  const botDisplayName = buildBotDisplayName(identity, appName, botName);
   const description = buildDescription(identity);
   const command = slugifyForSlash(identity);
 

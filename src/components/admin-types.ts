@@ -1,4 +1,5 @@
 import type { PublicChannelState } from "@/shared/channel-admin-state";
+import type { HostedFeatureSupportMatrix } from "@/shared/hosted-feature-support";
 import type {
   RestorePreparedStatus,
   RestorePreparedReason,
@@ -95,6 +96,7 @@ export type StatusPayload = {
     wouldBlock: string[];
   };
   channels: PublicChannelState;
+  featureSupport?: HostedFeatureSupportMatrix;
   restoreTarget: {
     restorePreparedStatus: RestorePreparedStatus;
     restorePreparedReason: RestorePreparedReason | null;
@@ -253,7 +255,7 @@ export type ActionErrorMeta = {
 
 export type ActionResult<T> =
   | { ok: true; data: T | null; meta: ActionSuccessMeta }
-  | { ok: false; error: string; meta: ActionErrorMeta };
+  | { ok: false; error: string; data?: unknown; meta: ActionErrorMeta };
 
 export type AdminActionEvent =
   | {

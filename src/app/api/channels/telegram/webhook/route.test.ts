@@ -47,6 +47,7 @@ async function configureTelegram(h: ScenarioHarness) {
 test("Telegram webhook: missing secret header returns 401", async () => {
   await withHarness(async (h) => {
     await configureTelegram(h);
+    _resetLogBuffer();
     const route = getTelegramWebhookRoute();
     const req = buildPostRequest(
       "/api/channels/telegram/webhook",
@@ -54,23 +55,37 @@ test("Telegram webhook: missing secret header returns 401", async () => {
     );
     const result = await callRoute(route.POST, req);
     assert.equal(result.status, 401);
+    const rejected = getServerLogs().find(
+      (entry) => entry.message === "channels.telegram_webhook_rejected",
+    );
+    assert.ok(rejected, "missing secret rejection should be logged");
+    assert.equal(rejected.data?.reason, "missing_or_invalid_secret");
+    assert.equal(rejected.data?.hasSecretHeader, false);
   });
 });
 
 test("Telegram webhook: wrong secret returns 401", async () => {
   await withHarness(async (h) => {
     await configureTelegram(h);
+    _resetLogBuffer();
     const route = getTelegramWebhookRoute();
     const req = buildTelegramWebhook({
       webhookSecret: "wrong-secret-entirely",
     });
     const result = await callRoute(route.POST, req);
     assert.equal(result.status, 401);
+    const rejected = getServerLogs().find(
+      (entry) => entry.message === "channels.telegram_webhook_rejected",
+    );
+    assert.ok(rejected, "invalid secret rejection should be logged");
+    assert.equal(rejected.data?.reason, "missing_or_invalid_secret");
+    assert.equal(rejected.data?.hasSecretHeader, true);
   });
 });
 
 test("Telegram webhook: no Telegram config returns 404", async () => {
   await withHarness(async () => {
+    _resetLogBuffer();
     const route = getTelegramWebhookRoute();
     const req = buildPostRequest(
       "/api/channels/telegram/webhook",
@@ -79,6 +94,33 @@ test("Telegram webhook: no Telegram config returns 404", async () => {
     );
     const result = await callRoute(route.POST, req);
     assert.equal(result.status, 404);
+    const rejected = getServerLogs().find(
+      (entry) => entry.message === "channels.telegram_webhook_rejected",
+    );
+    assert.ok(rejected, "missing config rejection should be logged");
+    assert.equal(rejected.data?.reason, "telegram_not_configured");
+  });
+});
+
+test("Telegram webhook: invalid JSON is acknowledged and logged", async () => {
+  await withHarness(async (h) => {
+    await configureTelegram(h);
+    _resetLogBuffer();
+    const route = getTelegramWebhookRoute();
+    const req = buildPostRequest(
+      "/api/channels/telegram/webhook",
+      "{not-json",
+      { "x-telegram-bot-api-secret-token": TELEGRAM_WEBHOOK_SECRET },
+    );
+    const result = await callRoute(route.POST, req);
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.json, { ok: true });
+    const rejected = getServerLogs().find(
+      (entry) => entry.message === "channels.telegram_webhook_rejected",
+    );
+    assert.ok(rejected, "invalid JSON ack should be logged");
+    assert.equal(rejected.data?.reason, "invalid_json");
+    assert.equal(rejected.data?.bodyLength, "{not-json".length);
   });
 });
 
@@ -849,6 +891,7 @@ test("Telegram webhook: fast path non-ok response falls through to workflow wake
 test("Telegram webhook: duplicate update_id is deduplicated", async () => {
   await withHarness(async (h) => {
     await configureTelegram(h);
+    _resetLogBuffer();
     h.fakeFetch.onPost(/api\.telegram\.org/, () =>
       Response.json({ ok: true, result: { message_id: 1 } }),
     );
@@ -878,6 +921,12 @@ test("Telegram webhook: duplicate update_id is deduplicated", async () => {
       const body2 = result2.json as { ok: boolean };
       assert.equal(body2.ok, true);
       assert.equal(startMock.mock.callCount(), 1);
+      const dedupSkip = getServerLogs().find(
+        (entry) => entry.message === "channels.telegram_webhook_dedup_skip",
+      );
+      assert.ok(dedupSkip, "duplicate Telegram update skip should be logged");
+      assert.equal(dedupSkip.data?.updateId, "99999");
+      assert.equal(dedupSkip.data?.dedupKey, channelDedupKey("telegram", "99999"));
     } finally {
       startMock.mock.restore();
     }

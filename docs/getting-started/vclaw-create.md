@@ -48,6 +48,23 @@ sequenceDiagram
 
 For the current flag surface, use `vclaw create --help` and the `vclaw` source in `src/commands/create.mjs`. The command source is the authority for validation rules.
 
+## Linked Debug Workspaces
+
+Use `--auto-link` when the deployment should be immediately debuggable from a local checkout:
+
+```bash
+vclaw create \
+  --scope your-team \
+  --auto-project-name \
+  --dir ~/dev/vercel-openclaw \
+  --admin-secret "$ADMIN_SECRET" \
+  --auto-link
+```
+
+`--auto-link` writes `.env.local` in the linked directory with the admin secret, automation bypass secret, and vclaw project metadata after managed environment variables have round-tripped through Vercel. It also ensures `.gitignore` covers `.env.local` and `.vercel`. Use that directory for production debugging so the Vercel project link, local source, and admin/debug commands agree.
+
+Treat `.env.local` as a secret-bearing local file. Do not commit it, paste it into logs, or include it in `.agent-runs` artifacts. For local UI inspection against production metadata, add `LOCAL_READ_ONLY=1` before `pnpm dev`.
+
 ## Non-Interactive Runs
 
 Promptless create flows usually need `--scope`, `--name`, `--claw-name`, `--admin-secret`, and `--yes`.
@@ -69,6 +86,12 @@ Be careful with shell expansion. `VAR=value vclaw create --slack-config-token "$
 - Explicit channel flags are requested outcomes. Telegram failures and invalid Slack credentials should fail or return a concrete recovery path. Slack has one deliberate degraded-success case: if credentials are saved and `auth.test` passes but `deliveryReady` or `routeReady` are still propagating, `vclaw create` warns and continues unless `VCLAW_STRICT_SLACK_DELIVERY=1` is set. Re-run `vclaw verify` or send a real Slack message to confirm delivery.
 - The local claw registry write is intentionally deferred until deploy, verify, and requested channel setup succeed.
 - Partial create failures with a real workspace/deployment usually recover through `vclaw doctor --workspace <path> --url <verify-url> --launch-verify` plus `vclaw verify`, not by deleting everything.
+
+## Completion Guidance
+
+After a successful create, users should treat [Hosted Feature Support](hosted-feature-support.md) as the source of truth for what the deployment supports. The dashboard exposes the same matrix in `/api/status`, `/api/channels/summary`, and `/api/admin/launch-verify` as `featureSupport`, so `vclaw` completion output and future smoke checks can link to or read the same contract.
+
+Slack and Telegram are the primary hosted channels. Discord and WhatsApp are experimental until real platform delivery and user-visible replies are verified end to end. Companion apps, voice, canvas, arbitrary channel adapters, and arbitrary plugin/skill/MCP installation require local/upstream OpenClaw unless the hosted matrix says otherwise.
 
 ## Bundle Resolution
 
