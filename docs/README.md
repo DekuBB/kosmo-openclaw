@@ -1,4 +1,4 @@
-# vercel-openclaw Docs
+# KosmoOpenClaw Docs
 
 Start here if you want to understand how the app works in practice.
 
